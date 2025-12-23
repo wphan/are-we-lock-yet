@@ -6,6 +6,7 @@ out
 dist
 *.tgz
 src/client/main.js
+public/
 
 # code coverage
 coverage
