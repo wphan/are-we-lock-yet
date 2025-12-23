@@ -1,23 +1,65 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { Connection } from '@solana/web3.js';
 import type { VersionedBlockResponse } from '@solana/web3.js';
-import {
-  COMPUTE_BUDGET_PROGRAM_ID,
-  VOTE_PROGRAM_ID,
-  MAX_BLOCK_UNITS,
-  MAX_WRITABLE_ACCOUNT_UNITS,
-  type TransactionMetrics,
-  type AccountWriteStats,
-  type ProgramStats,
-  type BlockAnalysis,
-} from '../../src/lib/types';
 
+// Inlined constants
+const MAX_BLOCK_UNITS = 48_000_000;
+const MAX_WRITABLE_ACCOUNT_UNITS = 12_000_000;
+const COMPUTE_BUDGET_PROGRAM_ID = 'ComputeBudget111111111111111111111111111111';
+const VOTE_PROGRAM_ID = 'Vote111111111111111111111111111111111111111';
 const DEFAULT_RPC_URL = 'https://api.mainnet-beta.solana.com';
 const DEFAULT_CU_LIMIT = 200_000;
 const SET_COMPUTE_UNIT_LIMIT = 0x02;
 const SET_COMPUTE_UNIT_PRICE = 0x03;
 
-// Simple in-memory cache (note: serverless functions may not persist between invocations)
+// Inlined types
+interface AccountWriteStats {
+  address: string;
+  totalCUs: number;
+  txCount: number;
+  percentOfLimit: number;
+  transactions: string[];
+}
+
+interface TransactionMetrics {
+  index: number;
+  signature: string;
+  priority: number;
+  cuPrice: number;
+  cuLimit: number;
+  cuUsed: number;
+  cost: number;
+  prioritizationFee: number;
+  writableAccounts: string[];
+  signers: string[];
+  programs: string[];
+  status: 'success' | 'failed';
+  isVote: boolean;
+}
+
+interface ProgramStats {
+  programId: string;
+  txCount: number;
+}
+
+interface BlockAnalysis {
+  slot: number;
+  blockhash: string;
+  parentSlot: number;
+  blockTime: number | null;
+  leader: string | null;
+  totalCUs: number;
+  totalTransactions: number;
+  successfulTransactions: number;
+  failedTransactions: number;
+  voteTransactions: number;
+  accountStats: AccountWriteStats[];
+  programStats: ProgramStats[];
+  transactions: TransactionMetrics[];
+  blockCapacity: number;
+}
+
+// Simple in-memory cache
 const blockCache = new Map<number, BlockAnalysis>();
 const MAX_CACHE_SIZE = 10;
 
@@ -279,6 +321,19 @@ function analyzeBlock(
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const { slot: slotParam } = req.query;
+
+  // Handle "latest" slot request
+  if (slotParam === 'latest') {
+    try {
+      const rpcUrl = process.env.SOLANA_RPC_URL || DEFAULT_RPC_URL;
+      const connection = new Connection(rpcUrl, { commitment: 'confirmed' });
+      const slot = await connection.getSlot();
+      return res.status(200).json({ slot });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      return res.status(500).json({ error: message });
+    }
+  }
 
   const slot = parseInt(slotParam as string, 10);
 

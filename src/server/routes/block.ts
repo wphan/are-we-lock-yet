@@ -22,7 +22,7 @@ function cacheBlock(slot: number, analysis: BlockAnalysis) {
 export function createBlockRoutes(connection: Connection) {
   const app = new Hono();
 
-  app.get('/latest-slot', async (c) => {
+  app.get('/latest', async (c) => {
     const slot = await getLatestSlot(connection);
     return c.json({ slot });
   });

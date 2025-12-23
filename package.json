@@ -4,7 +4,7 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "dev": "bun run build:client && bun run --watch src/server/index.ts",
+    "dev": "bun run build:client && bun run src/server/index.ts",
     "build:client": "bun build src/client/main.ts --outfile src/client/main.js --target browser",
     "build": "bun build src/client/main.ts --outfile src/client/main.js --target browser --minify",
     "start": "bun run src/server/index.ts"

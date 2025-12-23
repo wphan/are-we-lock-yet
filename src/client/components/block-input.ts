@@ -19,15 +19,9 @@ export function initBlockInput(onFetch: (slot: number) => void) {
     }
   }
 
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') handleFetch();
-  });
-
-  fetchBtn.addEventListener('click', handleFetch);
-
-  latestBtn.addEventListener('click', async () => {
+  async function fetchLatest() {
     try {
-      const res = await fetch('/api/block/latest-slot');
+      const res = await fetch('/api/block/latest');
       const data = await res.json();
       if (data.slot) {
         input.value = String(data.slot);
@@ -36,9 +30,16 @@ export function initBlockInput(onFetch: (slot: number) => void) {
     } catch (err) {
       console.error('Failed to fetch latest slot:', err);
     }
+  }
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') handleFetch();
   });
 
-  // Handle URL state
+  fetchBtn.addEventListener('click', handleFetch);
+  latestBtn.addEventListener('click', fetchLatest);
+
+  // Handle URL state - fetch from URL param or load latest
   const params = new URLSearchParams(window.location.search);
   const slotParam = params.get('slot');
   if (slotParam) {
@@ -47,6 +48,9 @@ export function initBlockInput(onFetch: (slot: number) => void) {
       input.value = slotParam;
       onFetch(slot);
     }
+  } else {
+    // No slot in URL, fetch latest
+    fetchLatest();
   }
 }
 
