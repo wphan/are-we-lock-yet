@@ -1,0 +1,22 @@
+{
+  "name": "account-lock-explorer",
+  "module": "src/server/index.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "bun run build:client && bun run --watch src/server/index.ts",
+    "build:client": "bun build src/client/main.ts --outfile src/client/main.js --target browser",
+    "build": "bun build src/client/main.ts --outfile src/client/main.js --target browser --minify",
+    "start": "bun run src/server/index.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@solana/web3.js": "^1.98.4",
+    "hono": "^4.11.1"
+  }
+}

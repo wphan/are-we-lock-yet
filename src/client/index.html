@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Are We Lock Yet</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔒</text></svg>">
+  <link rel="stylesheet" href="/styles/main.css">
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <h1 class="logo">Are We Lock Yet</h1>
+      <div class="block-input" id="block-input"></div>
+    </header>
+
+    <main class="main">
+      <section class="block-stats" id="block-stats">
+        <div class="stat-card">
+          <span class="stat-label">Slot</span>
+          <span class="stat-value" id="stat-slot">—</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">Leader</span>
+          <span class="stat-value mono" id="stat-leader">—</span>
+          <div class="stat-links" id="leader-links"></div>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">Transactions</span>
+          <span class="stat-value" id="stat-txs">—</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">Success</span>
+          <span class="stat-value success" id="stat-success">—</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">Failed</span>
+          <span class="stat-value failed" id="stat-failed">—</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">Votes</span>
+          <span class="stat-value vote" id="stat-votes">—</span>
+        </div>
+      </section>
+
+      <section class="chart-section">
+        <div class="chart-filters">
+          <div id="program-filter-container"></div>
+          <div id="account-filter-container"></div>
+        </div>
+        <div id="fee-chart"></div>
+      </section>
+
+      <section class="accounts-section">
+        <div class="section-header">
+          <h2 class="section-title">Account Write Lock CUs</h2>
+          <span class="section-subtitle">Sorted by total CU allocation (limit: 12M per account)</span>
+        </div>
+        <div class="table-container" id="account-table"></div>
+      </section>
+
+      <section class="transactions-section">
+        <div class="section-header">
+          <h2 class="section-title">Transactions</h2>
+        </div>
+        <div class="table-container" id="tx-table"></div>
+      </section>
+    </main>
+
+    <div class="loading-overlay" id="loading">
+      <div class="loading-spinner"></div>
+      <span>Loading block data...</span>
+    </div>
+
+    <div class="error-toast" id="error-toast"></div>
+
+    <footer class="footer">
+      <span>created by <a href="https://x.com/wphan7805" target="_blank">@wphan7805</a></span>
+      <span class="footer-divider">·</span>
+      <span>buy me a coffee <span class="coffee-address" id="coffee-address" title="Click to copy">1ockyGuK1HS66GxLYhf6VuWwUajY4Lspb3s23wkXiqu</span></span>
+    </footer>
+  </div>
+
+  <script type="module" src="/main.js"></script>
+</body>
+</html>
