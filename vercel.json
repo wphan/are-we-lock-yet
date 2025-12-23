@@ -1,10 +1,5 @@
 {
-  "buildCommand": "bun install && bun run build:client && cp src/client/main.js public/ && cp src/client/index.html public/ && cp -r src/client/styles public/",
+  "buildCommand": "bun install && bun run build:client && mkdir -p public && cp src/client/main.js public/ && cp src/client/index.html public/ && cp -r src/client/styles public/",
   "outputDirectory": "public",
-  "framework": null,
-  "functions": {
-    "api/**/*.ts": {
-      "runtime": "@vercel/node@3"
-    }
-  }
+  "framework": null
 }
