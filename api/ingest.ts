@@ -322,9 +322,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       );
 
       // Fetch all blocks in parallel (read-only, no deadlock risk)
+      const fetchStart = Date.now();
       const blockResults = await Promise.all(
         slots.map((s) => fetchAndParseBlock(connection, s))
       );
+      const fetchMs = Date.now() - fetchStart;
 
       const validBlocks = blockResults.filter((b): b is BlockData => b !== null);
       processed += validBlocks.length;
@@ -379,7 +381,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
 
       // Single batched upsert for all aggregated stats (no deadlock)
+      const dbStart = Date.now();
+      let upsertedRows = 0;
       if (aggregatedStats.size > 0) {
+        upsertedRows = aggregatedStats.size;
         const entries = Array.from(aggregatedStats.entries());
         const values: any[] = [];
         const placeholders: string[] = [];
@@ -417,6 +422,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           values
         );
       }
+      const dbMs = Date.now() - dbStart;
 
       lastProcessedSlot = batchEnd;
       batchCount++;
@@ -424,12 +430,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // Update checkpoint after each batch
       await updateLastProcessedSlot(db, batchEnd);
 
-      // Log progress every 5 batches
-      if (batchCount % 5 === 0) {
-        const totalElapsed = Date.now() - startTime;
-        const blocksPerSec = (processed / (totalElapsed / 1000)).toFixed(1);
-        console.log(`[PROGRESS] Batch ${batchCount}: ${processed} blocks, ${blocksPerSec}/s, ${(totalElapsed / 1000).toFixed(0)}s elapsed, slot ${lastProcessedSlot}`);
-      }
+      // Log every batch with timing breakdown
+      const totalElapsed = Date.now() - startTime;
+      console.log(`[BATCH ${batchCount}] ${validBlocks.length}/${slots.length} blocks, ${upsertedRows} rows | fetch=${fetchMs}ms db=${dbMs}ms | total=${(totalElapsed / 1000).toFixed(0)}s`);
     }
 
     const duration = Date.now() - startTime;
