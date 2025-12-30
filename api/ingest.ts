@@ -19,9 +19,9 @@ const SET_COMPUTE_UNIT_LIMIT = 0x02;
 //   - Only need ~750 blocks per 5-min window to keep up
 //   - ✅ Plenty of capacity with margin for catch-up
 
-const FUNCTION_TIMEOUT_MS = 290_000; // Exit 10s before 300s timeout for safety
-const BLOCKS_PER_RUN = 15_000; // ~750 needed per 5 min, extra capacity for catch-up
-const BATCH_SIZE = 50;
+const FUNCTION_TIMEOUT_MS = 250_000; // Exit 50s before 300s timeout for safety
+const BLOCKS_PER_RUN = 3_000; // ~750 blocks/5min needed to keep up
+const BATCH_SIZE = 50; // Process 50 blocks in parallel
 
 let sql: ReturnType<typeof postgres> | null = null;
 
@@ -166,32 +166,42 @@ async function upsertHourlyStats(
   bucketHour.setMinutes(0, 0, 0);
   const bucketHourStr = bucketHour.toISOString();
 
-  // Only process top 100 accounts
-  const topAccounts = blockData.accountStats.slice(0, 100);
+  // Only process top 50 accounts (reduced from 100 for performance)
+  const topAccounts = blockData.accountStats.slice(0, 50);
+  if (topAccounts.length === 0) return;
+
+  // Batch insert using VALUES list
+  const values: any[] = [];
+  const placeholders: string[] = [];
+  let paramIndex = 1;
 
   for (const account of topAccounts) {
-    await db.unsafe(
-      `INSERT INTO account_stats_hourly
-        (account_address, bucket_hour, total_cu, block_count, tx_count, max_percent_of_limit, avg_percent_of_limit, total_block_cu)
-      VALUES ($1, $2, $3, 1, $4, $5, $5, $6)
-      ON CONFLICT (account_address, bucket_hour) DO UPDATE SET
-        total_cu = account_stats_hourly.total_cu + EXCLUDED.total_cu,
-        block_count = account_stats_hourly.block_count + 1,
-        tx_count = account_stats_hourly.tx_count + EXCLUDED.tx_count,
-        max_percent_of_limit = GREATEST(account_stats_hourly.max_percent_of_limit, EXCLUDED.max_percent_of_limit),
-        avg_percent_of_limit = (account_stats_hourly.avg_percent_of_limit * account_stats_hourly.block_count + EXCLUDED.avg_percent_of_limit)
-                               / (account_stats_hourly.block_count + 1),
-        total_block_cu = account_stats_hourly.total_block_cu + EXCLUDED.total_block_cu`,
-      [
-        account.address,
-        bucketHourStr,
-        account.totalCUs,
-        account.txCount,
-        account.percentOfLimit,
-        blockData.totalCUs,
-      ]
+    placeholders.push(`($${paramIndex}, $${paramIndex + 1}, $${paramIndex + 2}, 1, $${paramIndex + 3}, $${paramIndex + 4}, $${paramIndex + 4}, $${paramIndex + 5})`);
+    values.push(
+      account.address,
+      bucketHourStr,
+      account.totalCUs,
+      account.txCount,
+      account.percentOfLimit,
+      blockData.totalCUs
     );
+    paramIndex += 6;
   }
+
+  await db.unsafe(
+    `INSERT INTO account_stats_hourly
+      (account_address, bucket_hour, total_cu, block_count, tx_count, max_percent_of_limit, avg_percent_of_limit, total_block_cu)
+    VALUES ${placeholders.join(", ")}
+    ON CONFLICT (account_address, bucket_hour) DO UPDATE SET
+      total_cu = account_stats_hourly.total_cu + EXCLUDED.total_cu,
+      block_count = account_stats_hourly.block_count + 1,
+      tx_count = account_stats_hourly.tx_count + EXCLUDED.tx_count,
+      max_percent_of_limit = GREATEST(account_stats_hourly.max_percent_of_limit, EXCLUDED.max_percent_of_limit),
+      avg_percent_of_limit = (account_stats_hourly.avg_percent_of_limit * account_stats_hourly.block_count + EXCLUDED.avg_percent_of_limit)
+                             / (account_stats_hourly.block_count + 1),
+      total_block_cu = account_stats_hourly.total_block_cu + EXCLUDED.total_block_cu`,
+    values
+  );
 }
 
 async function saveBlockSnapshot(db: ReturnType<typeof postgres>, blockData: BlockData): Promise<void> {
@@ -294,15 +304,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let exitedEarly = false;
 
     // Process in batches, checking timeout before each batch
+    let batchCount = 0;
     for (let slot = startSlot; slot <= endSlot; slot += BATCH_SIZE) {
       // Check if we're approaching timeout - exit early to save progress
       const elapsed = Date.now() - startTime;
       if (elapsed >= FUNCTION_TIMEOUT_MS) {
         exitedEarly = true;
-        console.log(`Approaching timeout (${elapsed}ms), exiting early after ${processed} blocks`);
+        console.log(`[TIMEOUT] Exiting at ${elapsed}ms after ${processed} blocks (${batchCount} batches)`);
         break;
       }
 
+      const batchStart = Date.now();
       const batchEnd = Math.min(slot + BATCH_SIZE - 1, endSlot);
       const slots = Array.from(
         { length: batchEnd - slot + 1 },
@@ -323,12 +335,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
 
       const results = await Promise.all(promises);
-      processed += results.filter(Boolean).length;
+      const batchSuccess = results.filter(Boolean).length;
+      processed += batchSuccess;
       errors += results.filter((r) => !r).length;
       lastProcessedSlot = batchEnd;
+      batchCount++;
 
       // Update checkpoint after each batch
       await updateLastProcessedSlot(db, batchEnd);
+
+      // Log progress every 10 batches
+      if (batchCount % 10 === 0) {
+        const batchDuration = Date.now() - batchStart;
+        const totalElapsed = Date.now() - startTime;
+        const blocksPerSec = (processed / (totalElapsed / 1000)).toFixed(1);
+        console.log(`[PROGRESS] Batch ${batchCount}: ${processed} blocks, ${blocksPerSec}/s, ${(totalElapsed / 1000).toFixed(0)}s elapsed, slot ${lastProcessedSlot}`);
+      }
     }
 
     const duration = Date.now() - startTime;
