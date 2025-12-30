@@ -16,15 +16,15 @@ function getDb() {
   return sqlClient;
 }
 
-type TimeRange = "1h" | "24h" | "7d";
+type TimeRange = "1d" | "7d" | "14d";
 type Metric = "cu" | "max_percent" | "avg_percent";
 
 // SQL-safe whitelist mappings - these values are used directly in queries
 // SECURITY: Only these exact strings are allowed, preventing SQL injection
 const RANGE_CONFIG = {
-  "1h": { table: "account_stats_hourly", timeColumn: "bucket_hour", rangeMs: 60 * 60 * 1000, bucketMs: 60 * 60 * 1000 },
-  "24h": { table: "account_stats_hourly", timeColumn: "bucket_hour", rangeMs: 24 * 60 * 60 * 1000, bucketMs: 60 * 60 * 1000 },
+  "1d": { table: "account_stats_daily", timeColumn: "bucket_day", rangeMs: 24 * 60 * 60 * 1000, bucketMs: 24 * 60 * 60 * 1000 },
   "7d": { table: "account_stats_daily", timeColumn: "bucket_day", rangeMs: 7 * 24 * 60 * 60 * 1000, bucketMs: 24 * 60 * 60 * 1000 },
+  "14d": { table: "account_stats_daily", timeColumn: "bucket_day", rangeMs: 14 * 24 * 60 * 60 * 1000, bucketMs: 24 * 60 * 60 * 1000 },
 } as const;
 
 const METRIC_ORDER = {
@@ -125,12 +125,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const range = (req.query.range as TimeRange) || "1h";
+    const range = (req.query.range as TimeRange) || "1d";
     const metric = (req.query.metric as Metric) || "cu";
     const limit = Math.min(parseInt(req.query.limit as string, 10) || 50, 100);
 
-    if (!["1h", "24h", "7d"].includes(range)) {
-      return res.status(400).json({ error: "Invalid range. Use 1h, 24h, or 7d" });
+    if (!["1d", "7d", "14d"].includes(range)) {
+      return res.status(400).json({ error: "Invalid range. Use 1d, 7d, or 14d" });
     }
 
     if (!["cu", "max_percent", "avg_percent"].includes(metric)) {

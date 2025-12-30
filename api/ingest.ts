@@ -14,9 +14,17 @@ const COMPUTE_BUDGET_PROGRAM_ID = "ComputeBudget111111111111111111111111111111";
 const DEFAULT_CU_LIMIT = 200_000;
 const SET_COMPUTE_UNIT_LIMIT = 0x02;
 
-// Blocks to process per invocation (5 min = ~750 blocks at 2.5 blocks/sec)
-// Process slightly more to catch up if previous run was slow
-const BLOCKS_PER_RUN = 800;
+// Solana produces ~750 blocks per 5 minutes (2.5 blocks/sec × 300s)
+//
+// Vercel Pro Plan (current):
+//   - 300s function timeout
+//   - Cron every 5 minutes (*/5 * * * *)
+//   - With ~50 blocks/sec RPC: ~12,500 blocks per run
+//   - Only need ~750 blocks per 5-min window to keep up
+//   - ✅ Plenty of capacity with margin for catch-up
+
+const FUNCTION_TIMEOUT_MS = 290_000; // Exit 10s before 300s timeout for safety
+const BLOCKS_PER_RUN = 15_000; // ~750 needed per 5 min, extra capacity for catch-up
 const BATCH_SIZE = 50;
 
 let sqlClient: SQL | null = null;
@@ -286,9 +294,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     let processed = 0;
     let errors = 0;
+    let lastProcessedSlot = startSlot - 1;
+    let exitedEarly = false;
 
-    // Process in batches
+    // Process in batches, checking timeout before each batch
     for (let slot = startSlot; slot <= endSlot; slot += BATCH_SIZE) {
+      // Check if we're approaching timeout - exit early to save progress
+      const elapsed = Date.now() - startTime;
+      if (elapsed >= FUNCTION_TIMEOUT_MS) {
+        exitedEarly = true;
+        console.log(`Approaching timeout (${elapsed}ms), exiting early after ${processed} blocks`);
+        break;
+      }
+
       const batchEnd = Math.min(slot + BATCH_SIZE - 1, endSlot);
       const slots = Array.from(
         { length: batchEnd - slot + 1 },
@@ -311,21 +329,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const results = await Promise.all(promises);
       processed += results.filter(Boolean).length;
       errors += results.filter((r) => !r).length;
+      lastProcessedSlot = batchEnd;
 
       // Update checkpoint after each batch
       await updateLastProcessedSlot(db, batchEnd);
     }
 
     const duration = Date.now() - startTime;
+    const blocksBehind = currentSlot - lastProcessedSlot;
+    const blocksPerSecond = processed > 0 ? (processed / (duration / 1000)).toFixed(1) : "0";
 
     return res.status(200).json({
       success: true,
       processed,
       errors,
       startSlot,
-      endSlot,
+      endSlot: lastProcessedSlot,
       currentSlot,
+      blocksBehind,
       durationMs: duration,
+      blocksPerSecond,
+      exitedEarly,
+      timeoutMs: FUNCTION_TIMEOUT_MS,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";

@@ -16,14 +16,14 @@ function getDb() {
   return sqlClient;
 }
 
-type TimeRange = "1h" | "24h" | "7d";
+type TimeRange = "1d" | "7d" | "14d";
 
 // SQL-safe whitelist mappings - these values are used directly in queries
 // SECURITY: Only these exact strings are allowed, preventing SQL injection
 const RANGE_CONFIG = {
-  "1h": { table: "account_stats_hourly", timeColumn: "bucket_hour", rangeMs: 60 * 60 * 1000, granularity: "hour" },
-  "24h": { table: "account_stats_hourly", timeColumn: "bucket_hour", rangeMs: 24 * 60 * 60 * 1000, granularity: "hour" },
+  "1d": { table: "account_stats_daily", timeColumn: "bucket_day", rangeMs: 24 * 60 * 60 * 1000, granularity: "day" },
   "7d": { table: "account_stats_daily", timeColumn: "bucket_day", rangeMs: 7 * 24 * 60 * 60 * 1000, granularity: "day" },
+  "14d": { table: "account_stats_daily", timeColumn: "bucket_day", rangeMs: 14 * 24 * 60 * 60 * 1000, granularity: "day" },
 } as const;
 
 interface DataPoint {
@@ -118,7 +118,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     const accountsParam = req.query.accounts as string;
-    const range = (req.query.range as TimeRange) || "24h";
+    const range = (req.query.range as TimeRange) || "7d";
 
     if (!accountsParam) {
       return res.status(400).json({ error: "accounts parameter is required" });
@@ -135,8 +135,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: "At least one valid account is required" });
     }
 
-    if (!["1h", "24h", "7d"].includes(range)) {
-      return res.status(400).json({ error: "Invalid range. Use 1h, 24h, or 7d" });
+    if (!["1d", "7d", "14d"].includes(range)) {
+      return res.status(400).json({ error: "Invalid range. Use 1d, 7d, or 14d" });
     }
 
     const result = await getAccountHistory(accounts, range);

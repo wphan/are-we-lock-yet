@@ -16,7 +16,14 @@ function getDb() {
   return sqlClient;
 }
 
-type TimeRange = "1h" | "24h" | "7d";
+type TimeRange = "1d" | "7d" | "14d";
+
+// SQL-safe whitelist for time ranges
+const RANGE_MS = {
+  "1d": 24 * 60 * 60 * 1000,
+  "7d": 7 * 24 * 60 * 60 * 1000,
+  "14d": 14 * 24 * 60 * 60 * 1000,
+} as const;
 
 interface BlockStats {
   slot: number;
@@ -32,18 +39,10 @@ async function getTopBlocks(
   limit: number
 ): Promise<BlockStats[]> {
   const db = getDb();
-  let rangeMs: number;
+  const rangeMs = RANGE_MS[range];
 
-  switch (range) {
-    case "1h":
-      rangeMs = 60 * 60 * 1000;
-      break;
-    case "24h":
-      rangeMs = 24 * 60 * 60 * 1000;
-      break;
-    case "7d":
-      rangeMs = 7 * 24 * 60 * 60 * 1000;
-      break;
+  if (!rangeMs) {
+    return [];
   }
 
   // Find the latest available block_time
@@ -123,7 +122,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     const address = req.query.address as string;
-    const range = (req.query.range as TimeRange) || "1h";
+    const range = (req.query.range as TimeRange) || "1d";
     const limit = Math.min(parseInt(req.query.limit as string, 10) || 10, 500);
 
     if (!address) {
@@ -136,8 +135,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: "Invalid address format" });
     }
 
-    if (!["1h", "24h", "7d"].includes(range)) {
-      return res.status(400).json({ error: "Invalid range. Use 1h, 24h, or 7d" });
+    if (!["1d", "7d", "14d"].includes(range)) {
+      return res.status(400).json({ error: "Invalid range. Use 1d, 7d, or 14d" });
     }
 
     const blocks = await getTopBlocks(address, range, limit);

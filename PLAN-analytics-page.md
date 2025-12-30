@@ -547,7 +547,37 @@ git push origin main
 
 ### Step 5: Configure Cron Job
 
-Add to `vercel.json`:
+**Vercel Hobby Plan (Limited)**
+
+Hobby accounts only allow daily cron jobs. Add to `vercel.json`:
+```json
+{
+  "crons": [
+    {
+      "path": "/api/ingest",
+      "schedule": "0 0 * * *"
+    }
+  ]
+}
+```
+
+⚠️ **Hobby Limitation**: Daily cron + 60s timeout = only ~2,500 blocks/run.
+Solana produces ~43,200 blocks/day, so **daily cron cannot keep up**.
+
+**Hobby Strategy**: Use cron for sampling, manual backfill for full data:
+```bash
+# Run backfill locally to catch up (can run anytime)
+SOLANA_RPC_URL=<your-rpc> POSTGRES_URL=<prod-url> bun run scripts/backfill.ts
+
+# Then run rollup to update daily/weekly tables
+POSTGRES_URL=<prod-url> bun run scripts/rollup.ts
+```
+
+**Or upgrade to Pro plan** for automatic continuous ingestion.
+
+**Vercel Pro Plan (Recommended for Live Data)**
+
+Pro allows frequent cron (every 5 minutes) + 300s timeout:
 ```json
 {
   "crons": [
@@ -559,7 +589,14 @@ Add to `vercel.json`:
 }
 ```
 
-Note: Cron jobs require Vercel Pro plan for 5-minute intervals.
+| Plan | Cron Frequency | Timeout | Monthly Budget | Blocks/Run | Keeps Up? |
+|------|----------------|---------|----------------|------------|-----------|
+| Hobby | Daily | 60s | 4 hours | ~2,500 | ❌ No |
+| Pro | Every 5 min | 300s | Unlimited | ~12,500 | ✅ Yes |
+
+**Hobby Runtime Budget**: 4 hours (14,400s) per month
+- Daily cron × 30 days × 60s = 1,800s/month (well under limit)
+- The function exits 5s early to ensure checkpoint is saved
 
 ### Step 6: Verify Production
 

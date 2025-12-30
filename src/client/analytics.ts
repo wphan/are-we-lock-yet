@@ -39,7 +39,7 @@ interface AccountBlocksResponse {
 }
 
 // State
-let currentRange: "1h" | "24h" | "7d" = "1h";
+let currentRange: "1d" | "7d" | "14d" = "1d";
 let currentMetric: "cu" | "max_percent" | "avg_percent" = "cu";
 let hotAccountsData: HotAccount[] = [];
 let searchedAccounts: Map<string, HotAccount & { rank: number }> = new Map();

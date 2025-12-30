@@ -1,5 +1,5 @@
 // src/client/analytics.ts
-var currentRange = "1h";
+var currentRange = "1d";
 var currentMetric = "cu";
 var hotAccountsData = [];
 var searchedAccounts = new Map;
@@ -111,7 +111,7 @@ function renderModalChart(blocks, address) {
     <div class="timeline-chart">
       <div class="chart-metric-toggle">
         <button class="chart-toggle-btn ${modalChartMetric === "cu" ? "active" : ""}" data-metric="cu">CU</button>
-        <button class="chart-toggle-btn ${modalChartMetric === "percent" ? "active" : ""}" data-metric="percent">% of Block</button>
+        <button class="chart-toggle-btn ${modalChartMetric === "percent" ? "active" : ""}" data-metric="percent">% of 12M Limit</button>
       </div>
       <div class="chart-bars">
         ${sortedBlocks.map((block) => {
@@ -151,15 +151,22 @@ function renderModalChart(blocks, address) {
   });
   const tooltip = document.getElementById("chart-tooltip");
   chartEl.querySelectorAll(".chart-bar-group").forEach((bar) => {
-    bar.addEventListener("mouseenter", () => {
+    bar.addEventListener("mouseenter", (e) => {
       if (!tooltip)
         return;
       const slot = bar.getAttribute("data-slot");
       const time = bar.getAttribute("data-time");
       const cu = bar.getAttribute("data-cu");
       const percent = bar.getAttribute("data-percent");
-      tooltip.innerHTML = `<strong>Slot ${slot}</strong><br>${time}<br>CU: ${cu}<br>% of Block: ${percent}`;
+      tooltip.innerHTML = `<strong>Slot ${slot}</strong><br>${time}<br>CU: ${cu}<br>% of 12M Limit: ${percent}`;
       tooltip.classList.add("visible");
+    });
+    bar.addEventListener("mousemove", (e) => {
+      if (!tooltip)
+        return;
+      const mouseEvent = e;
+      tooltip.style.left = `${mouseEvent.clientX + 10}px`;
+      tooltip.style.top = `${mouseEvent.clientY + 10}px`;
     });
     bar.addEventListener("mouseleave", () => {
       if (tooltip)
@@ -310,8 +317,8 @@ function renderAccountsTable() {
             <th class="align-right">Total CU</th>
             <th class="align-right">Blocks</th>
             <th class="align-right">Txs</th>
-            <th class="align-right">Max % of Block</th>
-            <th class="align-right">Avg % of Block</th>
+            <th class="align-right">Max % of 12M</th>
+            <th class="align-right">Avg % of 12M</th>
             <th></th>
           </tr>
         </thead>
@@ -383,10 +390,10 @@ function updateSubtitle() {
         metricText = "write lock CU";
         break;
       case "max_percent":
-        metricText = "max % of block";
+        metricText = "max % of 12M limit";
         break;
       case "avg_percent":
-        metricText = "avg % of block";
+        metricText = "avg % of 12M limit";
         break;
     }
     el.textContent = `Top accounts by ${metricText}`;
