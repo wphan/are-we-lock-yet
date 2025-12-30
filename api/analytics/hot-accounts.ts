@@ -19,6 +19,20 @@ function getDb() {
 type TimeRange = "1h" | "24h" | "7d";
 type Metric = "cu" | "max_percent" | "avg_percent";
 
+// SQL-safe whitelist mappings - these values are used directly in queries
+// SECURITY: Only these exact strings are allowed, preventing SQL injection
+const RANGE_CONFIG = {
+  "1h": { table: "account_stats_hourly", timeColumn: "bucket_hour", rangeMs: 60 * 60 * 1000, bucketMs: 60 * 60 * 1000 },
+  "24h": { table: "account_stats_hourly", timeColumn: "bucket_hour", rangeMs: 24 * 60 * 60 * 1000, bucketMs: 60 * 60 * 1000 },
+  "7d": { table: "account_stats_daily", timeColumn: "bucket_day", rangeMs: 7 * 24 * 60 * 60 * 1000, bucketMs: 24 * 60 * 60 * 1000 },
+} as const;
+
+const METRIC_ORDER = {
+  "cu": "total_cu DESC",
+  "max_percent": "max_percent_of_limit DESC",
+  "avg_percent": "avg_percent_of_limit DESC",
+} as const;
+
 interface HotAccount {
   address: string;
   totalCU: number;
@@ -34,29 +48,19 @@ async function getHotAccounts(
   limit: number
 ): Promise<{ accounts: HotAccount[]; startTime: string; endTime: string }> {
   const db = getDb();
-  let table: string;
-  let timeColumn: string;
-  let rangeMs: number;
 
-  switch (range) {
-    case "1h":
-      table = "account_stats_hourly";
-      timeColumn = "bucket_hour";
-      rangeMs = 60 * 60 * 1000;
-      break;
-    case "24h":
-      table = "account_stats_hourly";
-      timeColumn = "bucket_hour";
-      rangeMs = 24 * 60 * 60 * 1000;
-      break;
-    case "7d":
-      table = "account_stats_daily";
-      timeColumn = "bucket_day";
-      rangeMs = 7 * 24 * 60 * 60 * 1000;
-      break;
+  // SECURITY: These lookups return undefined for invalid input (validated in handler)
+  const config = RANGE_CONFIG[range];
+  const orderBy = METRIC_ORDER[metric];
+
+  if (!config || !orderBy) {
+    return { accounts: [], startTime: "", endTime: "" };
   }
 
+  const { table, timeColumn, rangeMs, bucketMs } = config;
+
   // Find the latest available data timestamp
+  // SECURITY: table and timeColumn are from whitelist, not user input
   const latestResult = await db.unsafe(
     `SELECT MAX(${timeColumn}) as latest FROM ${table}`
   );
@@ -67,30 +71,12 @@ async function getHotAccounts(
   }
 
   const endTime = new Date(latestTime);
-  // For hourly data, add 1 hour to represent end of that bucket
-  if (table === "account_stats_hourly") {
-    endTime.setTime(endTime.getTime() + 60 * 60 * 1000);
-  } else {
-    // For daily, add 1 day
-    endTime.setTime(endTime.getTime() + 24 * 60 * 60 * 1000);
-  }
+  endTime.setTime(endTime.getTime() + bucketMs);
 
   const startTime = new Date(endTime.getTime() - rangeMs);
 
-  let orderBy: string;
-  switch (metric) {
-    case "cu":
-      orderBy = "total_cu DESC";
-      break;
-    case "max_percent":
-      orderBy = "max_percent_of_limit DESC";
-      break;
-    case "avg_percent":
-      orderBy = "avg_percent_of_limit DESC";
-      break;
-  }
-
   // Get stats for the time range ending at the latest available data
+  // SECURITY: table, timeColumn, orderBy are from whitelists; user values use $1, $2, $3
   const currentQuery = `
     SELECT
       account_address as address,

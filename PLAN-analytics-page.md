@@ -421,37 +421,160 @@ POST /api/ingest
 
 ## Part 4: Implementation Steps
 
-### Phase 1: Infrastructure Setup
-1. Add `@vercel/postgres` dependency
-2. Create Postgres database on Vercel
-3. Run schema migrations
-4. Set up environment variables
+### Phase 1: Infrastructure Setup ✅ COMPLETE
+1. ✅ Add `@vercel/postgres` dependency (using Bun.sql instead)
+2. ✅ Create Postgres database on Vercel
+3. ✅ Run schema migrations (locally)
+4. ✅ Set up environment variables
 
-### Phase 2: Data Ingestion
-1. Create `/api/ingest` endpoint
-2. Implement block fetching with batch processing
-3. Implement aggregation logic (update hourly buckets)
-4. Add cron job in `vercel.json`
-5. Add data retention/cleanup logic
+### Phase 2: Data Ingestion ✅ COMPLETE
+1. ✅ Create ingest logic (`src/lib/ingest.ts`)
+2. ✅ Implement block fetching with batch processing
+3. ✅ Implement aggregation logic (update hourly buckets)
+4. ✅ Create backfill script (`scripts/backfill.ts`)
+5. ✅ Create rollup script (`scripts/rollup.ts`)
+6. ⏳ Add cron job in `vercel.json` (pending production deploy)
+7. ⏳ Add data retention/cleanup logic
 
-### Phase 3: Analytics API
-1. Create `/api/analytics/hot-accounts` endpoint
-2. Create `/api/analytics/account-history` endpoint
-3. Add caching headers for efficiency
+### Phase 3: Analytics API ✅ COMPLETE
+1. ✅ Create `/api/analytics/hot-accounts` endpoint
+2. ✅ Create `/api/analytics/account-history` endpoint
+3. ✅ Create `/api/analytics/account-lookup` endpoint (account search with rank)
+4. ✅ Create `/api/analytics/account-blocks` endpoint (top blocks for account)
+5. ✅ Add caching headers for efficiency
+6. ✅ Time ranges use latest available data (not current time)
 
-### Phase 4: Frontend
-1. Create analytics page HTML/CSS
-2. Implement hot accounts horizontal bar chart
-3. Implement time series comparison chart
-4. Add account selection/search
-5. Add time range selector
-6. Wire up to existing navigation
+### Phase 4: Frontend ✅ COMPLETE
+1. ✅ Create analytics page HTML/CSS
+2. ✅ Implement hot accounts horizontal bar chart
+3. ✅ Add account selection/search with global ranking
+4. ✅ Add time range selector (1H, 24H, 7D)
+5. ✅ Add metric selector (Total CU, Max %, Avg %)
+6. ✅ Wire up to existing navigation
+7. ✅ Account details modal with timeline chart
+8. ✅ Clickable addresses link to Solscan
+9. ❌ Account comparison chart (removed - not useful)
 
-### Phase 5: Polish
-1. Add loading states and error handling
-2. Add "last updated" indicator
-3. Optimize queries with EXPLAIN ANALYZE
-4. Add basic monitoring/logging
+### Phase 5: Polish ✅ MOSTLY COMPLETE
+1. ✅ Add loading states and error handling
+2. ✅ Add "last updated" indicator
+3. ✅ Add data range display (shows actual start/end times)
+4. ⏳ Optimize queries with EXPLAIN ANALYZE
+5. ⏳ Add basic monitoring/logging
+
+### Phase 6: Production Deployment ⏳ PENDING
+1. ⬜ Run database migrations on Vercel Postgres
+2. ⬜ Run initial backfill against production database
+3. ⬜ Run rollup to populate daily/weekly tables
+4. ⬜ Deploy code to production branch
+5. ⬜ Configure cron job for continuous ingestion
+6. ⬜ Verify analytics page works in production
+7. ⬜ Monitor for errors and rate limits
+
+---
+
+## Part 6.5: Production Deployment Checklist
+
+### Prerequisites
+- Vercel Postgres database created
+- `POSTGRES_URL` environment variable set in Vercel
+- `SOLANA_RPC_URL` environment variable set (recommend Helius for production)
+
+### Step 1: Run Migrations on Production
+
+```bash
+# Connect to production database and run migrations
+# Option A: Use Vercel CLI
+vercel env pull .env.production
+POSTGRES_URL=$(grep POSTGRES_URL .env.production | cut -d= -f2-) bun run scripts/migrate.ts
+
+# Option B: Use Vercel dashboard SQL editor
+# Copy SQL from scripts/migrate.ts and run manually
+```
+
+### Step 2: Seed Production Database
+
+**Option A: Sync from Local (Recommended if backfill already ran locally)**
+
+If you've already run backfill against your local Docker Postgres, you can sync that data to production:
+
+```bash
+# Pull production credentials
+vercel env pull .env.production
+
+# Sync all tables from local to production
+LOCAL_POSTGRES_URL=postgres://postgres:devpass@localhost:5432/account_lock \
+POSTGRES_URL=$(grep POSTGRES_URL .env.production | cut -d= -f2-) \
+bun run scripts/sync-to-prod.ts
+
+# Optional: Dry run first to see what would be copied
+LOCAL_POSTGRES_URL=postgres://postgres:devpass@localhost:5432/account_lock \
+POSTGRES_URL=$(grep POSTGRES_URL .env.production | cut -d= -f2-) \
+bun run scripts/sync-to-prod.ts --dry-run
+
+# Sync specific tables only
+bun run scripts/sync-to-prod.ts --tables=account_stats_hourly,block_snapshots
+```
+
+**Option B: Fresh Backfill (if no local data exists)**
+
+```bash
+# Run backfill against production database (from local machine)
+# This may take 1-2 hours for 7 days of data
+POSTGRES_URL=<production-url> bun run scripts/backfill.ts
+
+# Monitor progress
+cat backfill-state.json
+```
+
+### Step 3: Run Rollups
+
+```bash
+# After backfill/sync completes, populate daily/weekly tables
+POSTGRES_URL=<production-url> bun run scripts/rollup.ts
+```
+
+### Step 4: Deploy Code
+
+```bash
+# Merge dev to main (or your production branch)
+git checkout main
+git merge dev
+git push origin main
+
+# Vercel will auto-deploy
+```
+
+### Step 5: Configure Cron Job
+
+Add to `vercel.json`:
+```json
+{
+  "crons": [
+    {
+      "path": "/api/ingest",
+      "schedule": "*/5 * * * *"
+    }
+  ]
+}
+```
+
+Note: Cron jobs require Vercel Pro plan for 5-minute intervals.
+
+### Step 6: Verify Production
+
+1. Visit production analytics page
+2. Check all time ranges return data
+3. Click on accounts to verify modal works
+4. Search for a known account
+5. Check Vercel logs for any errors
+
+### Step 7: Set Up Monitoring
+
+1. Enable Vercel Analytics
+2. Set up alerts for function errors
+3. Monitor database connection pool usage
+4. Check RPC rate limit usage
 
 ---
 
@@ -459,13 +582,64 @@ POST /api/ingest
 
 ### Environment Strategy
 
-| Environment | Database | Block Data | Purpose |
-|-------------|----------|------------|---------|
-| Local dev | Docker Postgres | Mainnet RPC (real blocks) | Development & debugging |
-| Preview/PR | Vercel Preview DB | Mainnet RPC | Staging validation |
-| Production | Vercel Postgres | Mainnet RPC | Live users |
+| Environment | Database | Cron Jobs | Purpose |
+|-------------|----------|-----------|---------|
+| Local dev | Docker Postgres | N/A | Development & debugging |
+| Preview/PR | **Production Postgres** (read-only) | Disabled | Staging validation with real data |
+| Production | Vercel Postgres | Enabled | Live users |
 
-**Key Principle**: Always use mainnet data (devnet/testnet have unrealistic traffic patterns for write lock analysis), but never touch production database during development.
+**Key Principle**: Preview branches read from the production database but do NOT run cron jobs. This ensures:
+- Preview deployments have real data to test with
+- No duplicate data ingestion from preview branches
+- Safe testing without affecting production data
+
+### Preview Branch Configuration
+
+To configure preview branches to use production database without running cron jobs:
+
+**1. Set POSTGRES_URL for all environments in Vercel:**
+
+In Vercel Dashboard → Settings → Environment Variables:
+- Set `POSTGRES_URL` with scope: **Production, Preview, Development**
+- This allows preview branches to read from production database
+
+**2. Disable cron jobs in preview deployments:**
+
+Update `vercel.json` to only run cron in production:
+
+```json
+{
+  "crons": [
+    {
+      "path": "/api/ingest",
+      "schedule": "*/5 * * * *"
+    }
+  ]
+}
+```
+
+Then update `api/ingest.ts` to check for production environment:
+
+```typescript
+// At the top of the handler
+if (process.env.VERCEL_ENV !== "production") {
+  return res.status(200).json({
+    message: "Cron disabled in non-production environments",
+    env: process.env.VERCEL_ENV
+  });
+}
+```
+
+**3. Alternative: Use separate cron secret per environment:**
+
+Set `CRON_SECRET` only in production environment, so preview cron calls fail auth.
+
+### Why Preview Branches Use Production Data
+
+- **No separate backfill needed**: Preview deployments immediately have access to real analytics data
+- **Accurate testing**: Test with actual hot accounts and block data
+- **Cost efficient**: No need for separate preview database or backfill runs
+- **Safe**: Preview branches only read data; cron jobs are disabled so no writes occur
 
 ### Local Setup
 

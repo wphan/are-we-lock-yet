@@ -18,6 +18,14 @@ function getDb() {
 
 type TimeRange = "1h" | "24h" | "7d";
 
+// SQL-safe whitelist mappings - these values are used directly in queries
+// SECURITY: Only these exact strings are allowed, preventing SQL injection
+const RANGE_CONFIG = {
+  "1h": { table: "account_stats_hourly", timeColumn: "bucket_hour", rangeMs: 60 * 60 * 1000, granularity: "hour" },
+  "24h": { table: "account_stats_hourly", timeColumn: "bucket_hour", rangeMs: 24 * 60 * 60 * 1000, granularity: "hour" },
+  "7d": { table: "account_stats_daily", timeColumn: "bucket_day", rangeMs: 7 * 24 * 60 * 60 * 1000, granularity: "day" },
+} as const;
+
 interface DataPoint {
   time: string;
   totalCU: number;
@@ -38,35 +46,22 @@ async function getAccountHistory(
 ): Promise<{ series: AccountSeries[]; granularity: string }> {
   const db = getDb();
   const now = new Date();
-  let startTime: Date;
-  let table: string;
-  let timeColumn: string;
-  let granularity: string;
 
-  switch (range) {
-    case "1h":
-      startTime = new Date(now.getTime() - 60 * 60 * 1000);
-      table = "account_stats_hourly";
-      timeColumn = "bucket_hour";
-      granularity = "hour";
-      break;
-    case "24h":
-      startTime = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-      table = "account_stats_hourly";
-      timeColumn = "bucket_hour";
-      granularity = "hour";
-      break;
-    case "7d":
-      startTime = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-      table = "account_stats_daily";
-      timeColumn = "bucket_day";
-      granularity = "day";
-      break;
+  // SECURITY: Lookup returns undefined for invalid input (validated in handler)
+  const config = RANGE_CONFIG[range];
+
+  if (!config) {
+    return { series: [], granularity: "hour" };
   }
 
+  const { table, timeColumn, rangeMs, granularity } = config;
+  const startTime = new Date(now.getTime() - rangeMs);
+
   // Build placeholders for account addresses
+  // SECURITY: placeholders are just "$2", "$3", etc. - actual addresses are passed as parameters
   const placeholders = accounts.map((_, i) => `$${i + 2}`).join(", ");
 
+  // SECURITY: table, timeColumn are from whitelist; account addresses use parameterized $N values
   const query = `
     SELECT
       account_address as address,

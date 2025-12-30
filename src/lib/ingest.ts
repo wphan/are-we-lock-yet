@@ -7,7 +7,7 @@ const COMPUTE_BUDGET_PROGRAM_ID = "ComputeBudget111111111111111111111111111111";
 const DEFAULT_CU_LIMIT = 200_000;
 const SET_COMPUTE_UNIT_LIMIT = 0x02;
 
-const DEFAULT_RPC_URL = "https://api.mainnet-beta.solana.com";
+// Batch processing requires a paid RPC - public RPC will be rate-limited
 
 export interface AccountBlockStats {
   address: string;
@@ -231,7 +231,12 @@ export async function updateLastProcessedSlot(slot: number): Promise<void> {
 }
 
 export function getConnection(): Connection {
-  const rpcUrl = process.env.SOLANA_RPC_URL || DEFAULT_RPC_URL;
+  const rpcUrl = process.env.SOLANA_RPC_URL;
+  if (!rpcUrl) {
+    throw new Error(
+      "SOLANA_RPC_URL environment variable is required for batch processing"
+    );
+  }
   return new Connection(rpcUrl, { commitment: "confirmed" });
 }
 

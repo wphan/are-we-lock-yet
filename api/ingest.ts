@@ -7,7 +7,8 @@ import { Connection } from "@solana/web3.js";
 // Inline the database client for Vercel serverless
 import { SQL } from "bun";
 
-const DEFAULT_RPC_URL = "https://api.mainnet-beta.solana.com";
+// Cron jobs should always use a paid RPC for reliability
+// Do NOT fall back to public RPC - it will be rate-limited
 const MAX_WRITABLE_ACCOUNT_UNITS = 12_000_000;
 const COMPUTE_BUDGET_PROGRAM_ID = "ComputeBudget111111111111111111111111111111";
 const DEFAULT_CU_LIMIT = 200_000;
@@ -228,6 +229,14 @@ async function updateLastProcessedSlot(db: SQL, slot: number): Promise<void> {
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
+  // Disable cron in non-production environments (preview branches read from prod DB)
+  if (process.env.VERCEL_ENV && process.env.VERCEL_ENV !== "production") {
+    return res.status(200).json({
+      message: "Cron disabled in non-production environments",
+      env: process.env.VERCEL_ENV,
+    });
+  }
+
   // Verify cron secret if configured
   const cronSecret = process.env.CRON_SECRET;
   if (cronSecret) {
@@ -241,7 +250,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     const db = getDb();
-    const rpcUrl = process.env.SOLANA_RPC_URL || DEFAULT_RPC_URL;
+
+    // Require paid RPC for cron jobs - public RPC will be rate-limited
+    const rpcUrl = process.env.SOLANA_RPC_URL;
+    if (!rpcUrl) {
+      return res.status(500).json({
+        error: "SOLANA_RPC_URL environment variable is required for cron jobs",
+      });
+    }
+
     const connection = new Connection(rpcUrl, { commitment: "confirmed" });
 
     // Get current slot
