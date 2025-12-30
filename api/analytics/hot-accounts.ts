@@ -1,19 +1,19 @@
 // Hot accounts analytics API
-// GET /api/analytics/hot-accounts?range=1h|24h|7d&metric=cu|percent&limit=50
+// GET /api/analytics/hot-accounts?range=1d|7d|14d&metric=cu|percent&limit=50
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { SQL } from "bun";
+import postgres from "postgres";
 
-let sqlClient: SQL | null = null;
+let sql: ReturnType<typeof postgres> | null = null;
 
 function getDb() {
-  if (sqlClient) return sqlClient;
+  if (sql) return sql;
   const connectionString = process.env.POSTGRES_URL;
   if (!connectionString) {
     throw new Error("POSTGRES_URL environment variable is required");
   }
-  sqlClient = new SQL(connectionString);
-  return sqlClient;
+  sql = postgres(connectionString, { ssl: "require" });
+  return sql;
 }
 
 type TimeRange = "1d" | "7d" | "14d";

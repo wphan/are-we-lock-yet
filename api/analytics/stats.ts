@@ -2,18 +2,18 @@
 // GET /api/analytics/stats
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { SQL } from "bun";
+import postgres from "postgres";
 
-let sqlClient: SQL | null = null;
+let sql: ReturnType<typeof postgres> | null = null;
 
 function getDb() {
-  if (sqlClient) return sqlClient;
+  if (sql) return sql;
   const connectionString = process.env.POSTGRES_URL;
   if (!connectionString) {
     throw new Error("POSTGRES_URL environment variable is required");
   }
-  sqlClient = new SQL(connectionString);
-  return sqlClient;
+  sql = postgres(connectionString, { ssl: "require" });
+  return sql;
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {

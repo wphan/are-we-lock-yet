@@ -1,19 +1,19 @@
 // Account top blocks API - get top blocks by CU for a specific account
-// GET /api/analytics/account-blocks?address=xxx&range=1h|24h|7d&limit=10
+// GET /api/analytics/account-blocks?address=xxx&range=1d|7d|14d&limit=10
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { SQL } from "bun";
+import postgres from "postgres";
 
-let sqlClient: SQL | null = null;
+let sql: ReturnType<typeof postgres> | null = null;
 
 function getDb() {
-  if (sqlClient) return sqlClient;
+  if (sql) return sql;
   const connectionString = process.env.POSTGRES_URL;
   if (!connectionString) {
     throw new Error("POSTGRES_URL environment variable is required");
   }
-  sqlClient = new SQL(connectionString);
-  return sqlClient;
+  sql = postgres(connectionString, { ssl: "require" });
+  return sql;
 }
 
 type TimeRange = "1d" | "7d" | "14d";

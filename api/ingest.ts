@@ -3,12 +3,8 @@
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { Connection } from "@solana/web3.js";
+import postgres from "postgres";
 
-// Inline the database client for Vercel serverless
-import { SQL } from "bun";
-
-// Cron jobs should always use a paid RPC for reliability
-// Do NOT fall back to public RPC - it will be rate-limited
 const MAX_WRITABLE_ACCOUNT_UNITS = 12_000_000;
 const COMPUTE_BUDGET_PROGRAM_ID = "ComputeBudget111111111111111111111111111111";
 const DEFAULT_CU_LIMIT = 200_000;
@@ -27,16 +23,16 @@ const FUNCTION_TIMEOUT_MS = 290_000; // Exit 10s before 300s timeout for safety
 const BLOCKS_PER_RUN = 15_000; // ~750 needed per 5 min, extra capacity for catch-up
 const BATCH_SIZE = 50;
 
-let sqlClient: SQL | null = null;
+let sql: ReturnType<typeof postgres> | null = null;
 
 function getDb() {
-  if (sqlClient) return sqlClient;
+  if (sql) return sql;
   const connectionString = process.env.POSTGRES_URL;
   if (!connectionString) {
     throw new Error("POSTGRES_URL environment variable is required");
   }
-  sqlClient = new SQL(connectionString);
-  return sqlClient;
+  sql = postgres(connectionString, { ssl: "require" });
+  return sql;
 }
 
 function parseComputeBudgetInstructions(tx: any): number {
@@ -161,7 +157,7 @@ async function fetchAndParseBlock(
 }
 
 async function upsertHourlyStats(
-  db: SQL,
+  db: ReturnType<typeof postgres>,
   blockData: BlockData
 ): Promise<void> {
   if (!blockData.blockTime) return;
@@ -198,7 +194,7 @@ async function upsertHourlyStats(
   }
 }
 
-async function saveBlockSnapshot(db: SQL, blockData: BlockData): Promise<void> {
+async function saveBlockSnapshot(db: ReturnType<typeof postgres>, blockData: BlockData): Promise<void> {
   if (!blockData.blockTime) return;
 
   const blockTime = new Date(blockData.blockTime * 1000).toISOString();
@@ -217,7 +213,7 @@ async function saveBlockSnapshot(db: SQL, blockData: BlockData): Promise<void> {
   );
 }
 
-async function getLastProcessedSlot(db: SQL): Promise<number | null> {
+async function getLastProcessedSlot(db: ReturnType<typeof postgres>): Promise<number | null> {
   const result = await db.unsafe(
     "SELECT last_processed_slot FROM ingest_state WHERE id = 1"
   );
@@ -225,7 +221,7 @@ async function getLastProcessedSlot(db: SQL): Promise<number | null> {
   return parseInt(result[0].last_processed_slot, 10);
 }
 
-async function updateLastProcessedSlot(db: SQL, slot: number): Promise<void> {
+async function updateLastProcessedSlot(db: ReturnType<typeof postgres>, slot: number): Promise<void> {
   await db.unsafe(
     `INSERT INTO ingest_state (id, last_processed_slot, updated_at)
      VALUES (1, $1, NOW())
