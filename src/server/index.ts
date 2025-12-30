@@ -1,20 +1,44 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { serveStatic } from 'hono/bun';
-import { createConnection } from './rpc.ts';
-import { createBlockRoutes } from './routes/block.ts';
+import blockHandler from '../../api/block/[slot]';
 
 const app = new Hono();
 
 // CORS for development
 app.use('/api/*', cors());
 
-// Create Solana connection
-const rpcUrl = process.env.SOLANA_RPC_URL;
-const connection = createConnection(rpcUrl);
+// API routes - mimic Vercel function routing
+app.all('/api/block/:slot', async (c) => {
+  const slot = c.req.param('slot');
 
-// API routes
-app.route('/api/block', createBlockRoutes(connection));
+  // Create mock Vercel request/response
+  const req = {
+    query: { slot },
+    method: c.req.method,
+  };
+
+  let statusCode = 200;
+  let responseData: any;
+
+  const res = {
+    status: (code: number) => ({
+      json: (data: any) => {
+        statusCode = code;
+        responseData = data;
+        return res;
+      }
+    }),
+    json: (data: any) => {
+      responseData = data;
+      return res;
+    }
+  };
+
+  await blockHandler(req as any, res as any);
+
+  return c.json(responseData, statusCode as any);
+});
 
 // Serve static files
 app.use('/*', serveStatic({ root: './src/client' }));

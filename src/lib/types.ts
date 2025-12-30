@@ -12,12 +12,24 @@ export const LAMPORTS_PER_SIGNATURE = 5000;
 export const COMPUTE_BUDGET_PROGRAM_ID = 'ComputeBudget111111111111111111111111111111';
 export const VOTE_PROGRAM_ID = 'Vote111111111111111111111111111111111111111';
 
-export interface AccountWriteStats {
+export interface AccountStats {
   address: string;
   totalCUs: number;
   txCount: number;
   percentOfLimit: number;
   transactions: string[];
+  signerCount: number;
+  writeCount: number;
+  readCount: number;
+}
+
+// Alias for backward compatibility
+export type AccountWriteStats = AccountStats;
+
+export interface AccountInfo {
+  address: string;
+  isSigner: boolean;
+  isWritable: boolean;
 }
 
 export interface TransactionMetrics {
@@ -29,8 +41,9 @@ export interface TransactionMetrics {
   cuUsed: number;
   cost: number;
   prioritizationFee: number;
-  writableAccounts: string[];
-  signers: string[];
+  accounts: AccountInfo[];
+  writableAccounts: string[]; // kept for backward compatibility
+  signers: string[]; // kept for backward compatibility
   programs: string[];
   status: 'success' | 'failed';
   isVote: boolean;

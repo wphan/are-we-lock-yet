@@ -51,7 +51,7 @@ function formatNumber(n: number): string {
   return n.toLocaleString();
 }
 
-function showTxDetail(tx: TransactionMetrics) {
+export function showTxDetail(tx: TransactionMetrics) {
   state.selectedTx = tx;
 
   let detailPanel = document.getElementById('tx-detail-panel');
@@ -117,9 +117,20 @@ function showTxDetail(tx: TransactionMetrics) {
           <span class="tx-detail-value mono">${formatNumber(tx.prioritizationFee + 5000)} lamports</span>
         </div>
         <div class="tx-detail-row writable-accounts">
-          <span class="tx-detail-label">Writable Accounts (${tx.writableAccounts.length})</span>
+          <span class="tx-detail-label">Accounts (${tx.accounts?.length ?? tx.writableAccounts.length})</span>
           <div class="tx-detail-accounts">
-            ${tx.writableAccounts.map(addr => `<span class="mono">${addr}</span>`).join('')}
+            ${(tx.accounts ?? tx.writableAccounts.map(addr => ({ address: addr, isSigner: false, isWritable: true }))).map(acc => {
+              const addr = typeof acc === 'string' ? acc : acc.address;
+              const isSigner = typeof acc === 'string' ? false : acc.isSigner;
+              const isWritable = typeof acc === 'string' ? true : acc.isWritable;
+              const isProgram = tx.programs.includes(addr);
+              const badges = [];
+              if (isProgram) badges.push('<span class="role-badge program" title="Program">P</span>');
+              if (isSigner) badges.push('<span class="role-badge signer" title="Signer">S</span>');
+              if (isWritable) badges.push('<span class="role-badge write" title="Writable">W</span>');
+              if (!isWritable) badges.push('<span class="role-badge read" title="Read-only">R</span>');
+              return `<span class="mono account-row"><span class="account-badges">${badges.join('')}</span>${addr}</span>`;
+            }).join('')}
           </div>
         </div>
       </div>
@@ -254,7 +265,7 @@ export function renderFeeChart(transactions: TransactionMetrics[], accountFilter
           return `
             <div class="bar-wrapper${hasFilters && !matchesFilter ? ' dimmed' : ''}${hasFilters && matchesFilter ? ' highlighted' : ''}"
                  data-index="${tx.index}"
-                 title="Index: ${tx.index}\n${METRIC_LABELS[state.metric]}: ${formatValue(value)}\nStatus: ${tx.isVote ? 'Vote' : tx.status}">
+                 data-tooltip="Index: ${tx.index} | ${METRIC_LABELS[state.metric]}: ${formatValue(value)} | ${tx.isVote ? 'Vote' : tx.status}">
               <div class="bar" style="height: ${height}%; background: ${getBarColor(tx)};"></div>
             </div>
           `;

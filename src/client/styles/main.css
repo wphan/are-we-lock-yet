@@ -580,6 +580,7 @@ tr.clickable {
   display: flex;
   height: 300px;
   position: relative;
+  overflow: visible;
 }
 
 .chart-y-axis {
@@ -620,7 +621,7 @@ tr.clickable {
   display: flex;
   align-items: flex-end;
   gap: 1px;
-  overflow-x: hidden;
+  overflow: visible;
   padding-bottom: 2px;
   background: var(--bg-elevated);
 }
@@ -645,6 +646,7 @@ tr.clickable {
   display: flex;
   align-items: flex-end;
   cursor: pointer;
+  position: relative;
 }
 
 .bar-wrapper:hover .bar {
@@ -785,13 +787,24 @@ tr.clickable {
   width: 100%;
 }
 
-.tx-detail-accounts span {
+.tx-detail-accounts span.account-row {
   font-size: var(--text-xs);
   color: var(--text-secondary);
   padding: var(--space-xs) var(--space-sm);
   background: var(--bg-elevated);
   border-radius: 4px;
   word-break: break-all;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.tx-detail-accounts .account-badges {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+  padding: 0;
+  background: none;
 }
 
 .tx-detail-footer {
@@ -1085,6 +1098,45 @@ tr.clickable {
   opacity: 1;
 }
 
+/* Role badges */
+.role-badges {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.role-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+}
+
+.role-badge.signer {
+  background: rgba(168, 85, 247, 0.2);
+  color: #a855f7;
+}
+
+.role-badge.write {
+  background: rgba(239, 68, 68, 0.2);
+  color: #ef4444;
+}
+
+.role-badge.read {
+  background: rgba(34, 197, 94, 0.2);
+  color: #22c55e;
+}
+
+.role-badge.program {
+  background: rgba(59, 130, 246, 0.2);
+  color: #3b82f6;
+}
+
 .program-filter-empty {
   padding: var(--space-lg);
   text-align: center;
@@ -1214,4 +1266,31 @@ tr.clickable {
 .signer-tag:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
+}
+
+/* Chart bar tooltip (100ms delay) */
+.bar-wrapper[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: var(--space-xs) var(--space-sm);
+  font-size: var(--text-xs);
+  color: var(--text-primary);
+  white-space: nowrap;
+  z-index: 100;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.1s ease 100ms, visibility 0.1s ease 100ms;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.bar-wrapper[data-tooltip]:hover::after {
+  opacity: 1;
+  visibility: visible;
 }
