@@ -321,23 +321,103 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         (_, i) => slot + i
       );
 
-      const promises = slots.map(async (s) => {
-        const blockData = await fetchAndParseBlock(connection, s);
-        if (blockData) {
-          await upsertHourlyStats(db, blockData);
-          // Save snapshot for every 10th block to reduce storage
-          if (s % 10 === 0) {
-            await saveBlockSnapshot(db, blockData);
-          }
-          return true;
-        }
-        return false;
-      });
+      // Fetch all blocks in parallel (read-only, no deadlock risk)
+      const blockResults = await Promise.all(
+        slots.map((s) => fetchAndParseBlock(connection, s))
+      );
 
-      const results = await Promise.all(promises);
-      const batchSuccess = results.filter(Boolean).length;
-      processed += batchSuccess;
-      errors += results.filter((r) => !r).length;
+      const validBlocks = blockResults.filter((b): b is BlockData => b !== null);
+      processed += validBlocks.length;
+      errors += blockResults.length - validBlocks.length;
+
+      // Aggregate stats across all blocks in batch to avoid deadlocks
+      const aggregatedStats = new Map<string, {
+        bucketHour: string;
+        totalCUs: number;
+        txCount: number;
+        maxPercent: number;
+        percentSum: number;
+        blockCount: number;
+        totalBlockCU: number;
+      }>();
+
+      for (const block of validBlocks) {
+        if (!block.blockTime) continue;
+
+        const bucketHour = new Date(block.blockTime * 1000);
+        bucketHour.setMinutes(0, 0, 0);
+        const bucketHourStr = bucketHour.toISOString();
+
+        // Only process top 50 accounts per block
+        for (const account of block.accountStats.slice(0, 50)) {
+          const key = `${account.address}|${bucketHourStr}`;
+          const existing = aggregatedStats.get(key);
+          if (existing) {
+            existing.totalCUs += account.totalCUs;
+            existing.txCount += account.txCount;
+            existing.maxPercent = Math.max(existing.maxPercent, account.percentOfLimit);
+            existing.percentSum += account.percentOfLimit;
+            existing.blockCount += 1;
+            existing.totalBlockCU += block.totalCUs;
+          } else {
+            aggregatedStats.set(key, {
+              bucketHour: bucketHourStr,
+              totalCUs: account.totalCUs,
+              txCount: account.txCount,
+              maxPercent: account.percentOfLimit,
+              percentSum: account.percentOfLimit,
+              blockCount: 1,
+              totalBlockCU: block.totalCUs,
+            });
+          }
+        }
+
+        // Save snapshot for every 10th block
+        if (block.slot % 10 === 0) {
+          await saveBlockSnapshot(db, block);
+        }
+      }
+
+      // Single batched upsert for all aggregated stats (no deadlock)
+      if (aggregatedStats.size > 0) {
+        const entries = Array.from(aggregatedStats.entries());
+        const values: any[] = [];
+        const placeholders: string[] = [];
+        let paramIndex = 1;
+
+        for (const [key, stats] of entries) {
+          const address = key.split("|")[0];
+          const avgPercent = stats.percentSum / stats.blockCount;
+          placeholders.push(`($${paramIndex}, $${paramIndex + 1}, $${paramIndex + 2}, $${paramIndex + 3}, $${paramIndex + 4}, $${paramIndex + 5}, $${paramIndex + 6}, $${paramIndex + 7})`);
+          values.push(
+            address,
+            stats.bucketHour,
+            stats.totalCUs,
+            stats.blockCount,
+            stats.txCount,
+            stats.maxPercent,
+            avgPercent,
+            stats.totalBlockCU
+          );
+          paramIndex += 8;
+        }
+
+        await db.unsafe(
+          `INSERT INTO account_stats_hourly
+            (account_address, bucket_hour, total_cu, block_count, tx_count, max_percent_of_limit, avg_percent_of_limit, total_block_cu)
+          VALUES ${placeholders.join(", ")}
+          ON CONFLICT (account_address, bucket_hour) DO UPDATE SET
+            total_cu = account_stats_hourly.total_cu + EXCLUDED.total_cu,
+            block_count = account_stats_hourly.block_count + EXCLUDED.block_count,
+            tx_count = account_stats_hourly.tx_count + EXCLUDED.tx_count,
+            max_percent_of_limit = GREATEST(account_stats_hourly.max_percent_of_limit, EXCLUDED.max_percent_of_limit),
+            avg_percent_of_limit = (account_stats_hourly.avg_percent_of_limit * account_stats_hourly.block_count + EXCLUDED.avg_percent_of_limit * EXCLUDED.block_count)
+                                   / (account_stats_hourly.block_count + EXCLUDED.block_count),
+            total_block_cu = account_stats_hourly.total_block_cu + EXCLUDED.total_block_cu`,
+          values
+        );
+      }
+
       lastProcessedSlot = batchEnd;
       batchCount++;
 
@@ -346,7 +426,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       // Log progress every 10 batches
       if (batchCount % 10 === 0) {
-        const batchDuration = Date.now() - batchStart;
         const totalElapsed = Date.now() - startTime;
         const blocksPerSec = (processed / (totalElapsed / 1000)).toFixed(1);
         console.log(`[PROGRESS] Batch ${batchCount}: ${processed} blocks, ${blocksPerSec}/s, ${(totalElapsed / 1000).toFixed(0)}s elapsed, slot ${lastProcessedSlot}`);
