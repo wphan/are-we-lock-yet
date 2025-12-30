@@ -20,8 +20,8 @@ const SET_COMPUTE_UNIT_LIMIT = 0x02;
 //   - ✅ Plenty of capacity with margin for catch-up
 
 const FUNCTION_TIMEOUT_MS = 250_000; // Exit 50s before 300s timeout for safety
-const BLOCKS_PER_RUN = 3_000; // ~750 blocks/5min needed to keep up
-const BATCH_SIZE = 50; // Process 50 blocks in parallel
+const BLOCKS_PER_RUN = 2_000; // ~750 blocks/5min needed to keep up
+const BATCH_SIZE = 10; // Smaller batches to avoid RPC rate limits
 
 let sql: ReturnType<typeof postgres> | null = null;
 
@@ -424,8 +424,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // Update checkpoint after each batch
       await updateLastProcessedSlot(db, batchEnd);
 
-      // Log progress every 10 batches
-      if (batchCount % 10 === 0) {
+      // Log progress every 5 batches
+      if (batchCount % 5 === 0) {
         const totalElapsed = Date.now() - startTime;
         const blocksPerSec = (processed / (totalElapsed / 1000)).toFixed(1);
         console.log(`[PROGRESS] Batch ${batchCount}: ${processed} blocks, ${blocksPerSec}/s, ${(totalElapsed / 1000).toFixed(0)}s elapsed, slot ${lastProcessedSlot}`);
