@@ -5,9 +5,12 @@
   "private": true,
   "scripts": {
     "dev": "bun run build:client && bun run src/server/index.ts",
-    "build:client": "bun build src/client/main.ts --outfile src/client/main.js --target browser",
-    "build": "bun build src/client/main.ts --outfile src/client/main.js --target browser --minify",
-    "start": "bun run src/server/index.ts"
+    "build:client": "bun build src/client/main.ts --outfile src/client/main.js --target browser && bun build src/client/analytics.ts --outfile src/client/analytics.js --target browser",
+    "build": "bun build src/client/main.ts --outfile src/client/main.js --target browser --minify && bun build src/client/analytics.ts --outfile src/client/analytics.js --target browser --minify",
+    "start": "bun run src/server/index.ts",
+    "migrate": "bun run scripts/migrate.ts",
+    "backfill": "bun run scripts/backfill.ts",
+    "rollup": "bun run scripts/rollup.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",
@@ -18,6 +21,7 @@
   },
   "dependencies": {
     "@solana/web3.js": "^1.98.4",
-    "hono": "^4.11.1"
+    "hono": "^4.11.1",
+    "postgres": "^3.4.7"
   }
 }

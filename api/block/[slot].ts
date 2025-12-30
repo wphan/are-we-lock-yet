@@ -7,8 +7,66 @@ const MAX_BLOCK_UNITS = 48_000_000;
 const MAX_WRITABLE_ACCOUNT_UNITS = 12_000_000;
 const COMPUTE_BUDGET_PROGRAM_ID = 'ComputeBudget111111111111111111111111111111';
 const VOTE_PROGRAM_ID = 'Vote111111111111111111111111111111111111111';
-const DEFAULT_RPC_URL = 'https://api.mainnet-beta.solana.com';
+const PUBLIC_RPC_URL = 'https://api.mainnet-beta.solana.com';
+const FALLBACK_RPC_URL = process.env.SOLANA_RPC_URL; // Paid RPC (Helius, etc.)
 const DEFAULT_CU_LIMIT = 200_000;
+
+// Fetch block trying public RPC first, falling back to paid RPC if available
+async function fetchBlockWithFallback(
+  slot: number
+): Promise<{ block: VersionedBlockResponse | null; usedFallback: boolean; error?: string }> {
+  // Try public RPC first
+  try {
+    const connection = new Connection(PUBLIC_RPC_URL, { commitment: 'confirmed' });
+    const block = await connection.getBlock(slot, {
+      maxSupportedTransactionVersion: 0,
+      transactionDetails: 'full',
+      rewards: true,
+    });
+    return { block, usedFallback: false };
+  } catch (publicError) {
+    const publicMessage = publicError instanceof Error ? publicError.message : 'Unknown error';
+
+    // If no fallback configured, throw the original error
+    if (!FALLBACK_RPC_URL) {
+      return { block: null, usedFallback: false, error: publicMessage };
+    }
+
+    // Try fallback RPC
+    try {
+      const fallbackConnection = new Connection(FALLBACK_RPC_URL, { commitment: 'confirmed' });
+      const block = await fallbackConnection.getBlock(slot, {
+        maxSupportedTransactionVersion: 0,
+        transactionDetails: 'full',
+        rewards: true,
+      });
+      console.log(`Public RPC failed (${publicMessage}), used fallback RPC for slot ${slot}`);
+      return { block, usedFallback: true };
+    } catch (fallbackError) {
+      const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : 'Unknown error';
+      return { block: null, usedFallback: true, error: `Public: ${publicMessage}; Fallback: ${fallbackMessage}` };
+    }
+  }
+}
+
+async function fetchLatestSlotWithFallback(): Promise<{ slot: number; usedFallback: boolean }> {
+  // Try public RPC first
+  try {
+    const connection = new Connection(PUBLIC_RPC_URL, { commitment: 'confirmed' });
+    const slot = await connection.getSlot();
+    return { slot, usedFallback: false };
+  } catch (publicError) {
+    // If no fallback configured, throw the original error
+    if (!FALLBACK_RPC_URL) {
+      throw publicError;
+    }
+
+    // Try fallback RPC
+    const fallbackConnection = new Connection(FALLBACK_RPC_URL, { commitment: 'confirmed' });
+    const slot = await fallbackConnection.getSlot();
+    return { slot, usedFallback: true };
+  }
+}
 const SET_COMPUTE_UNIT_LIMIT = 0x02;
 const SET_COMPUTE_UNIT_PRICE = 0x03;
 
@@ -408,9 +466,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Handle "latest" slot request
   if (slotParam === 'latest') {
     try {
-      const rpcUrl = process.env.SOLANA_RPC_URL || DEFAULT_RPC_URL;
-      const connection = new Connection(rpcUrl, { commitment: 'confirmed' });
-      const slot = await connection.getSlot();
+      const { slot } = await fetchLatestSlotWithFallback();
       return res.status(200).json({ slot });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
@@ -430,36 +486,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).json(cached);
   }
 
-  try {
-    const rpcUrl = process.env.SOLANA_RPC_URL || DEFAULT_RPC_URL;
-    const connection = new Connection(rpcUrl, { commitment: 'confirmed' });
+  // Fetch block with public RPC first, fallback to paid RPC
+  const { block, error } = await fetchBlockWithFallback(slot);
 
-    const block = await connection.getBlock(slot, {
-      maxSupportedTransactionVersion: 0,
-      transactionDetails: 'full',
-      rewards: true,
-    });
-
-    if (!block) {
-      return res.status(404).json({ error: `Block not found for slot ${slot}` });
-    }
-
-    const leader = getLeaderFromBlock(block);
-    const transactions = parseBlock(block);
-    const analysis = analyzeBlock(
-      slot,
-      block.blockhash,
-      block.parentSlot,
-      block.blockTime ?? null,
-      leader,
-      transactions
-    );
-
-    cacheBlock(slot, analysis);
-
-    return res.status(200).json(analysis);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    return res.status(500).json({ error: message });
+  if (error && !block) {
+    return res.status(500).json({ error });
   }
+
+  if (!block) {
+    return res.status(404).json({ error: `Block not found for slot ${slot}` });
+  }
+
+  const leader = getLeaderFromBlock(block);
+  const transactions = parseBlock(block);
+  const analysis = analyzeBlock(
+    slot,
+    block.blockhash,
+    block.parentSlot,
+    block.blockTime ?? null,
+    leader,
+    transactions
+  );
+
+  cacheBlock(slot, analysis);
+
+  return res.status(200).json(analysis);
 }

@@ -38,6 +38,7 @@ export function aggregateAccountStats(
       address,
       totalCUs: data.totalCUs,
       txCount: data.txCount,
+      // Percent of 12M limit = account's CU limit / MAX_WRITABLE_ACCOUNT_UNITS
       percentOfLimit: (data.totalCUs / MAX_WRITABLE_ACCOUNT_UNITS) * 100,
       transactions: data.transactions,
     });
