@@ -3,76 +3,97 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Are We Lock Yet</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔒</text></svg>">
+  <title>Analytics | Are We Lock Yet</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📊</text></svg>">
   <link rel="stylesheet" href="/styles/main.css">
+  <link rel="stylesheet" href="/styles/analytics.css">
 </head>
 <body>
   <div class="app">
     <header class="header">
-      <h1 class="logo">Are We Lock Yet</h1>
-      <div class="block-input" id="block-input"></div>
+      <a href="/" class="logo">Are We Lock Yet</a>
+      <nav class="nav-tabs">
+        <a href="/" class="nav-tab active">Analytics</a>
+        <a href="/explorer.html" class="nav-tab">Explorer</a>
+      </nav>
     </header>
 
     <main class="main">
-      <section class="block-stats" id="block-stats">
-        <div class="stat-card">
-          <span class="stat-label">Slot</span>
-          <span class="stat-value" id="stat-slot">—</span>
+      <section class="analytics-controls">
+        <div class="control-group">
+          <label class="control-label">Time Range</label>
+          <div class="toggle-group" id="time-range-toggle">
+            <button class="toggle-btn active" data-value="1h">1H</button>
+            <button class="toggle-btn" data-value="24h">24H</button>
+            <button class="toggle-btn" data-value="7d">7D</button>
+          </div>
         </div>
-        <div class="stat-card">
-          <span class="stat-label">Leader</span>
-          <span class="stat-value mono" id="stat-leader">—</span>
-          <div class="stat-links" id="leader-links"></div>
+        <div class="control-group">
+          <label class="control-label">Sort By</label>
+          <div class="toggle-group" id="metric-toggle">
+            <button class="toggle-btn active" data-value="cu">Total CU</button>
+            <button class="toggle-btn" data-value="max_percent">Max %</button>
+            <button class="toggle-btn" data-value="avg_percent">Avg %</button>
+          </div>
         </div>
-        <div class="stat-card">
-          <span class="stat-label">Transactions</span>
-          <span class="stat-value" id="stat-txs">—</span>
-        </div>
-        <div class="stat-card">
-          <span class="stat-label">Success</span>
-          <span class="stat-value success" id="stat-success">—</span>
-        </div>
-        <div class="stat-card">
-          <span class="stat-label">Failed</span>
-          <span class="stat-value failed" id="stat-failed">—</span>
-        </div>
-        <div class="stat-card">
-          <span class="stat-label">Votes</span>
-          <span class="stat-value vote" id="stat-votes">—</span>
+        <div class="control-group last-updated">
+          <span class="control-label">Last Updated</span>
+          <span class="update-time" id="last-updated">—</span>
         </div>
       </section>
 
-      <section class="chart-section">
-        <div class="chart-filters">
-          <div id="program-filter-container"></div>
-          <div id="account-filter-container"></div>
-        </div>
-        <div id="fee-chart"></div>
-      </section>
-
-      <section class="accounts-section">
+      <section class="hot-accounts-section">
         <div class="section-header">
-          <h2 class="section-title">Account Write Lock CUs</h2>
-          <span class="section-subtitle">Sorted by total CU allocation (limit: 12M per account)</span>
+          <h2 class="section-title">Hot Accounts</h2>
+          <span class="section-subtitle" id="hot-accounts-subtitle">Top accounts by write lock CU</span>
+          <span class="data-range" id="data-range"></span>
         </div>
-        <div class="table-container" id="account-table"></div>
+        <div class="hot-accounts-chart" id="hot-accounts-chart">
+          <div class="empty-state">Loading...</div>
+        </div>
       </section>
 
-      <section class="transactions-section">
+      <section class="accounts-table-section">
         <div class="section-header">
-          <h2 class="section-title">Transactions</h2>
+          <h2 class="section-title">Detailed Stats</h2>
+          <div class="account-search">
+            <input type="text" id="account-search-input" class="search-input" placeholder="Search account address..." />
+            <button id="account-search-btn" class="search-btn">Search</button>
+          </div>
         </div>
-        <div class="table-container" id="tx-table"></div>
+        <div class="table-container" id="accounts-table">
+          <div class="empty-state">Loading...</div>
+        </div>
       </section>
     </main>
 
     <div class="loading-overlay" id="loading">
       <div class="loading-spinner"></div>
-      <span>Loading block data...</span>
+      <span>Loading analytics data...</span>
     </div>
 
     <div class="error-toast" id="error-toast"></div>
+
+    <!-- Account Details Modal -->
+    <div class="modal-overlay" id="account-modal">
+      <div class="modal">
+        <div class="modal-header">
+          <h3 class="modal-title">Account Details</h3>
+          <button class="modal-close" id="modal-close">&times;</button>
+        </div>
+        <div class="modal-address" id="modal-address"></div>
+        <div class="modal-content">
+          <h4 class="modal-subtitle">Activity Over Time</h4>
+          <div class="modal-chart" id="modal-chart">
+            <div class="empty-state">Loading...</div>
+          </div>
+          <h4 class="modal-subtitle">Top Blocks by CU</h4>
+          <div class="modal-blocks" id="modal-blocks">
+            <div class="empty-state">Loading...</div>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <footer class="footer">
       <span>created by <a href="https://x.com/wphan7805" target="_blank">@wphan7805</a></span>
@@ -81,6 +102,6 @@
     </footer>
   </div>
 
-  <script type="module" src="/main.js"></script>
+  <script type="module" src="/analytics.js"></script>
 </body>
 </html>

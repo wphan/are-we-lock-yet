@@ -1,0 +1,161 @@
+// Account history analytics API
+// GET /api/analytics/account-history?accounts=addr1,addr2&range=24h
+
+import type { VercelRequest, VercelResponse } from "@vercel/node";
+import { SQL } from "bun";
+
+let sqlClient: SQL | null = null;
+
+function getDb() {
+  if (sqlClient) return sqlClient;
+  const connectionString = process.env.POSTGRES_URL;
+  if (!connectionString) {
+    throw new Error("POSTGRES_URL environment variable is required");
+  }
+  sqlClient = new SQL(connectionString);
+  return sqlClient;
+}
+
+type TimeRange = "1h" | "24h" | "7d";
+
+interface DataPoint {
+  time: string;
+  totalCU: number;
+  blockCount: number;
+  txCount: number;
+  maxPercentOfLimit: number;
+  avgPercentOfLimit: number;
+}
+
+interface AccountSeries {
+  address: string;
+  dataPoints: DataPoint[];
+}
+
+async function getAccountHistory(
+  accounts: string[],
+  range: TimeRange
+): Promise<{ series: AccountSeries[]; granularity: string }> {
+  const db = getDb();
+  const now = new Date();
+  let startTime: Date;
+  let table: string;
+  let timeColumn: string;
+  let granularity: string;
+
+  switch (range) {
+    case "1h":
+      startTime = new Date(now.getTime() - 60 * 60 * 1000);
+      table = "account_stats_hourly";
+      timeColumn = "bucket_hour";
+      granularity = "hour";
+      break;
+    case "24h":
+      startTime = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+      table = "account_stats_hourly";
+      timeColumn = "bucket_hour";
+      granularity = "hour";
+      break;
+    case "7d":
+      startTime = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      table = "account_stats_daily";
+      timeColumn = "bucket_day";
+      granularity = "day";
+      break;
+  }
+
+  // Build placeholders for account addresses
+  const placeholders = accounts.map((_, i) => `$${i + 2}`).join(", ");
+
+  const query = `
+    SELECT
+      account_address as address,
+      ${timeColumn} as time,
+      total_cu,
+      block_count,
+      tx_count,
+      max_percent_of_limit,
+      avg_percent_of_limit
+    FROM ${table}
+    WHERE ${timeColumn} >= $1
+      AND account_address IN (${placeholders})
+    ORDER BY account_address, ${timeColumn}
+  `;
+
+  const results = await db.unsafe(query, [startTime.toISOString(), ...accounts]);
+
+  // Group by account
+  const seriesMap = new Map<string, DataPoint[]>();
+
+  // Initialize empty arrays for all requested accounts
+  for (const addr of accounts) {
+    seriesMap.set(addr, []);
+  }
+
+  if (Array.isArray(results)) {
+    for (const row of results) {
+      const dataPoints = seriesMap.get(row.address);
+      if (dataPoints) {
+        dataPoints.push({
+          time: new Date(row.time).toISOString(),
+          totalCU: parseFloat(row.total_cu),
+          blockCount: parseInt(row.block_count, 10),
+          txCount: parseInt(row.tx_count, 10),
+          maxPercentOfLimit: parseFloat(row.max_percent_of_limit),
+          avgPercentOfLimit: parseFloat(row.avg_percent_of_limit || "0"),
+        });
+      }
+    }
+  }
+
+  const series: AccountSeries[] = [];
+  for (const [address, dataPoints] of seriesMap) {
+    series.push({ address, dataPoints });
+  }
+
+  return { series, granularity };
+}
+
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  if (req.method !== "GET") {
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+
+  try {
+    const accountsParam = req.query.accounts as string;
+    const range = (req.query.range as TimeRange) || "24h";
+
+    if (!accountsParam) {
+      return res.status(400).json({ error: "accounts parameter is required" });
+    }
+
+    // Validate Solana address format (32-44 chars, Base58 alphabet)
+    const base58Regex = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+    const accounts = accountsParam
+      .split(",")
+      .slice(0, 10) // Max 10 accounts
+      .filter((addr) => base58Regex.test(addr));
+
+    if (accounts.length === 0) {
+      return res.status(400).json({ error: "At least one valid account is required" });
+    }
+
+    if (!["1h", "24h", "7d"].includes(range)) {
+      return res.status(400).json({ error: "Invalid range. Use 1h, 24h, or 7d" });
+    }
+
+    const result = await getAccountHistory(accounts, range);
+
+    // Cache for 1 minute
+    res.setHeader("Cache-Control", "public, s-maxage=60, stale-while-revalidate=120");
+
+    return res.status(200).json({
+      range,
+      ...result,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    console.error("Account history error:", message);
+    return res.status(500).json({ error: message });
+  }
+}
