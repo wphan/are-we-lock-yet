@@ -13,12 +13,21 @@ const SET_COMPUTE_UNIT_LIMIT = 0x02;
 const SET_COMPUTE_UNIT_PRICE = 0x03;
 
 // Inlined types
-interface AccountWriteStats {
+interface AccountInfo {
+  address: string;
+  isSigner: boolean;
+  isWritable: boolean;
+}
+
+interface AccountStats {
   address: string;
   totalCUs: number;
   txCount: number;
   percentOfLimit: number;
   transactions: string[];
+  signerCount: number;
+  writeCount: number;
+  readCount: number;
 }
 
 interface TransactionMetrics {
@@ -30,6 +39,7 @@ interface TransactionMetrics {
   cuUsed: number;
   cost: number;
   prioritizationFee: number;
+  accounts: AccountInfo[];
   writableAccounts: string[];
   signers: string[];
   programs: string[];
@@ -53,7 +63,7 @@ interface BlockAnalysis {
   successfulTransactions: number;
   failedTransactions: number;
   voteTransactions: number;
-  accountStats: AccountWriteStats[];
+  accountStats: AccountStats[];
   programStats: ProgramStats[];
   transactions: TransactionMetrics[];
   blockCapacity: number;
@@ -146,6 +156,44 @@ function getSigners(tx: any): string[] {
   return accountKeys.slice(0, numSigners);
 }
 
+function getAllAccounts(tx: any): AccountInfo[] {
+  const message = tx.transaction.message;
+  const header = message.header;
+  const staticKeys = message.staticAccountKeys.map((k: any) => k.toBase58());
+  const accounts: AccountInfo[] = [];
+
+  // Static accounts layout:
+  // [0, numRequiredSignatures): signers
+  //   [0, numRequiredSignatures - numReadonlySignedAccounts): writable signers
+  //   [numRequiredSignatures - numReadonlySignedAccounts, numRequiredSignatures): readonly signers
+  // [numRequiredSignatures, len - numReadonlyUnsignedAccounts): writable non-signers
+  // [len - numReadonlyUnsignedAccounts, len): readonly non-signers
+
+  const numSigners = header.numRequiredSignatures;
+  const numWritableSigners = numSigners - header.numReadonlySignedAccounts;
+  const numReadonlyUnsigned = header.numReadonlyUnsignedAccounts;
+  const readonlyUnsignedStart = staticKeys.length - numReadonlyUnsigned;
+
+  for (let i = 0; i < staticKeys.length; i++) {
+    const address = staticKeys[i]!;
+    const isSigner = i < numSigners;
+    const isWritable = i < numWritableSigners || (i >= numSigners && i < readonlyUnsignedStart);
+    accounts.push({ address, isSigner, isWritable });
+  }
+
+  // Add loaded addresses from ALT
+  if (tx.meta?.loadedAddresses) {
+    for (const addr of tx.meta.loadedAddresses.writable) {
+      accounts.push({ address: addr.toBase58(), isSigner: false, isWritable: true });
+    }
+    for (const addr of tx.meta.loadedAddresses.readonly) {
+      accounts.push({ address: addr.toBase58(), isSigner: false, isWritable: false });
+    }
+  }
+
+  return accounts;
+}
+
 function isVoteTransaction(tx: any): boolean {
   const message = tx.transaction.message;
   const accountKeys = message.staticAccountKeys.map((k: any) => k.toBase58());
@@ -187,8 +235,9 @@ function parseTransaction(tx: any, index: number): TransactionMetrics {
 
   const { cuLimit, cuPrice } = parseComputeBudgetInstructions(tx);
   const cuUsed = tx.meta?.computeUnitsConsumed ?? 0;
-  const writableAccounts = getWritableAccounts(tx);
-  const signers = getSigners(tx);
+  const accounts = getAllAccounts(tx);
+  const writableAccounts = accounts.filter(a => a.isWritable).map(a => a.address);
+  const signers = accounts.filter(a => a.isSigner).map(a => a.address);
   const programs = getPrograms(tx);
   const isVote = isVoteTransaction(tx);
   const status = tx.meta?.err ? 'failed' : 'success';
@@ -218,6 +267,7 @@ function parseTransaction(tx: any, index: number): TransactionMetrics {
     cuUsed,
     cost,
     prioritizationFee,
+    accounts,
     writableAccounts,
     signers,
     programs,
@@ -246,7 +296,14 @@ function analyzeBlock(
   leader: string | null,
   transactions: TransactionMetrics[]
 ): BlockAnalysis {
-  const accountMap = new Map<string, { totalCUs: number; txCount: number; transactions: string[] }>();
+  const accountMap = new Map<string, {
+    totalCUs: number;
+    txCount: number;
+    transactions: string[];
+    signerCount: number;
+    writeCount: number;
+    readCount: number;
+  }>();
   const programMap = new Map<string, number>();
 
   let totalCUs = 0;
@@ -267,12 +324,34 @@ function analyzeBlock(
       failedTransactions++;
     }
 
-    for (const account of tx.writableAccounts) {
-      const existing = accountMap.get(account) || { totalCUs: 0, txCount: 0, transactions: [] };
-      existing.totalCUs += tx.cuLimit;
+    // Track all accounts with their roles
+    for (const account of tx.accounts) {
+      const existing = accountMap.get(account.address) || {
+        totalCUs: 0,
+        txCount: 0,
+        transactions: [],
+        signerCount: 0,
+        writeCount: 0,
+        readCount: 0,
+      };
+
+      // Only count CUs for writable accounts
+      if (account.isWritable) {
+        existing.totalCUs += tx.cuLimit;
+        existing.writeCount += 1;
+      } else {
+        existing.readCount += 1;
+      }
+
+      if (account.isSigner) {
+        existing.signerCount += 1;
+      }
+
       existing.txCount += 1;
-      existing.transactions.push(tx.signature);
-      accountMap.set(account, existing);
+      if (!existing.transactions.includes(tx.signature)) {
+        existing.transactions.push(tx.signature);
+      }
+      accountMap.set(account.address, existing);
     }
 
     for (const program of tx.programs) {
@@ -280,7 +359,7 @@ function analyzeBlock(
     }
   }
 
-  const accountStats: AccountWriteStats[] = [];
+  const accountStats: AccountStats[] = [];
   for (const [address, stats] of accountMap.entries()) {
     accountStats.push({
       address,
@@ -288,10 +367,14 @@ function analyzeBlock(
       txCount: stats.txCount,
       percentOfLimit: (stats.totalCUs / MAX_WRITABLE_ACCOUNT_UNITS) * 100,
       transactions: stats.transactions,
+      signerCount: stats.signerCount,
+      writeCount: stats.writeCount,
+      readCount: stats.readCount,
     });
   }
 
-  accountStats.sort((a, b) => b.totalCUs - a.totalCUs);
+  // Sort by totalCUs (write lock contention), then by txCount
+  accountStats.sort((a, b) => b.totalCUs - a.totalCUs || b.txCount - a.txCount);
 
   const programStats: ProgramStats[] = [];
   for (const [programId, txCount] of programMap.entries()) {

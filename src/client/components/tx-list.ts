@@ -1,4 +1,5 @@
 import type { TransactionMetrics } from '../../lib/types.ts';
+import { showTxDetail } from './fee-chart.ts';
 
 interface FilterState {
   showVotes: boolean;
@@ -69,9 +70,11 @@ export function renderTransactionList(transactions: TransactionMetrics[]) {
   }
 
   if (filterState.accountFilters.length > 0) {
-    filtered = filtered.filter((tx) =>
-      filterState.accountFilters.some(addr => tx.writableAccounts.includes(addr))
-    );
+    filtered = filtered.filter((tx) => {
+      // Check all accounts (not just writable)
+      const allAddresses = tx.accounts?.map(a => a.address) ?? tx.writableAccounts;
+      return filterState.accountFilters.some(addr => allAddresses.includes(addr));
+    });
   }
 
   // Apply program filter
@@ -116,7 +119,7 @@ export function renderTransactionList(transactions: TransactionMetrics[]) {
           ${filtered.length === 0 ? `
             <tr><td colspan="9" class="empty-state">No transactions match filters</td></tr>
           ` : filtered.map((tx) => `
-            <tr>
+            <tr class="clickable" data-tx-index="${tx.index}">
               <td class="mono align-right">${tx.index}</td>
               <td class="mono">
                 <span class="sig-cell">
@@ -200,6 +203,17 @@ export function renderTransactionList(transactions: TransactionMetrics[]) {
         btn.classList.add('copied');
         setTimeout(() => btn.classList.remove('copied'), 1500);
       }
+    });
+  });
+
+  // Row click handlers to show transaction detail
+  container.querySelectorAll('tr.clickable').forEach((row) => {
+    row.addEventListener('click', (e) => {
+      // Don't trigger if clicking a link or button
+      if ((e.target as HTMLElement).closest('a, button')) return;
+      const index = parseInt((row as HTMLElement).dataset.txIndex ?? '', 10);
+      const tx = filtered.find(t => t.index === index);
+      if (tx) showTxDetail(tx);
     });
   });
 }

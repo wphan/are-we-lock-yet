@@ -39,6 +39,14 @@ function formatCUs(cus: number): string {
   return String(cus);
 }
 
+function getRoleBadges(a: AccountWriteStats): string {
+  const badges: string[] = [];
+  if (a.signerCount > 0) badges.push(`<span class="role-badge signer" title="Signer: ${a.signerCount}x">S</span>`);
+  if (a.writeCount > 0) badges.push(`<span class="role-badge write" title="Write: ${a.writeCount}x">W</span>`);
+  if (a.readCount > 0) badges.push(`<span class="role-badge read" title="Read: ${a.readCount}x">R</span>`);
+  return badges.join('');
+}
+
 export function renderAccountFilter(
   container: HTMLElement,
   accountStats: AccountWriteStats[],
@@ -70,13 +78,14 @@ export function renderAccountFilter(
             <label class="program-filter-item">
               <input type="checkbox" value="${a.address}" ${selectedAccounts.has(a.address) ? 'checked' : ''}>
               <span class="program-name mono" title="${a.address}">${truncateAddr(a.address)}</span>
+              <span class="role-badges">${getRoleBadges(a)}</span>
               <button class="filter-copy-btn" data-copy="${a.address}" title="Copy address">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
                   <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
                 </svg>
               </button>
-              <span class="program-count">${formatCUs(a.totalCUs)} (${a.txCount})</span>
+              <span class="program-count">${a.totalCUs > 0 ? formatCUs(a.totalCUs) : ''} (${a.txCount})</span>
             </label>
           `).join('')}
           ${filteredAccounts.length > 50 ? `
