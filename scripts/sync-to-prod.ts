@@ -78,9 +78,21 @@ async function syncTable(
     for (const row of rows) {
       const values = columns.map((col: string) => {
         const val = row[col];
+        // Handle Date objects - convert to ISO string
+        if (val instanceof Date) {
+          return val.toISOString();
+        }
         // Handle JSONB columns
-        if (typeof val === "object" && val !== null && !(val instanceof Date)) {
+        if (typeof val === "object" && val !== null) {
           return JSON.stringify(val);
+        }
+        // Handle date strings with problematic timezones
+        if (typeof val === "string" && /^\d{4}-\d{2}-\d{2}/.test(val)) {
+          // Parse and re-format to ensure clean ISO format
+          const date = new Date(val);
+          if (!isNaN(date.getTime())) {
+            return date.toISOString();
+          }
         }
         return val;
       });
