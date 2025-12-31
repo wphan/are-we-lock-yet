@@ -171,10 +171,12 @@ function parseComputeBudgetInstructions(tx: any): { cuLimit: number; cuPrice: nu
     const discriminator = data[0];
 
     if (discriminator === SET_COMPUTE_UNIT_LIMIT && data.length >= 5) {
-      cuLimit = data[1]! | (data[2]! << 8) | (data[3]! << 16) | (data[4]! << 24);
+      // Use >>> 0 to convert to unsigned 32-bit
+      cuLimit = (data[1]! | (data[2]! << 8) | (data[3]! << 16) | (data[4]! << 24)) >>> 0;
     } else if (discriminator === SET_COMPUTE_UNIT_PRICE && data.length >= 9) {
-      const low = data[1]! | (data[2]! << 8) | (data[3]! << 16) | (data[4]! << 24);
-      const high = data[5]! | (data[6]! << 8) | (data[7]! << 16) | (data[8]! << 24);
+      // Use >>> 0 to convert to unsigned 32-bit to avoid negative overflow
+      const low = (data[1]! | (data[2]! << 8) | (data[3]! << 16) | (data[4]! << 24)) >>> 0;
+      const high = (data[5]! | (data[6]! << 8) | (data[7]! << 16) | (data[8]! << 24)) >>> 0;
       cuPrice = low + high * 0x100000000;
     }
   }

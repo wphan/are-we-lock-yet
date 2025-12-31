@@ -56,8 +56,9 @@ function parseComputeBudgetInstructions(tx: any): number {
     const data = ix.data;
     if (data.length === 0) continue;
     if (data[0] === SET_COMPUTE_UNIT_LIMIT && data.length >= 5) {
+      // Use >>> 0 to convert to unsigned 32-bit
       cuLimit =
-        data[1]! | (data[2]! << 8) | (data[3]! << 16) | (data[4]! << 24);
+        (data[1]! | (data[2]! << 8) | (data[3]! << 16) | (data[4]! << 24)) >>> 0;
     }
   }
   return cuLimit;
