@@ -1,14 +1,20 @@
 // Backfill script - run locally to populate historical data
-// Usage: bun run scripts/backfill.ts [--days=N]
+// Usage: bun run scripts/backfill.ts [--days=N] [--fill-gaps]
+//
+// Modes:
+//   --days=N     Backfill N days from current slot (default)
+//   --fill-gaps  Find and fill gaps in hourly data
 //
 // This script fetches historical blocks from mainnet and populates
 // the analytics tables. It saves progress and can resume if interrupted.
 
 import { Connection, type VersionedBlockResponse } from "@solana/web3.js";
 import { getDb } from "../src/lib/db/index.ts";
+import postgres from "postgres";
 
 const MAX_DAYS = 7;
 const BLOCKS_PER_DAY = 43_200; // ~2.5 blocks/sec
+const BLOCKS_PER_HOUR = 9_000; // ~2.5 blocks/sec * 3600
 const MAX_RETRIES = 3;
 
 const BLOCKS_PER_BATCH = 100; // Smaller batches to avoid DB timeout
@@ -46,17 +52,25 @@ interface BlockData {
   accountStats: AccountBlockStats[];
 }
 
-function parseArgs(): { days: number } {
+function parseArgs(): { days: number; fillGaps: boolean; useProd: boolean } {
   const args = process.argv.slice(2);
   let days = MAX_DAYS;
+  let fillGaps = false;
+  let useProd = false;
 
   for (const arg of args) {
     if (arg.startsWith("--days=")) {
       days = Math.min(parseInt(arg.slice(7), 10), MAX_DAYS);
     }
+    if (arg === "--fill-gaps") {
+      fillGaps = true;
+    }
+    if (arg === "--prod") {
+      useProd = true;
+    }
   }
 
-  return { days };
+  return { days, fillGaps, useProd };
 }
 
 // Process with a true concurrent pool (always keeps N requests in flight)
@@ -495,7 +509,322 @@ async function backfill() {
   console.log(`\nState file cleaned up. Run rollup.ts next to aggregate daily/weekly data.`);
 }
 
-backfill().catch((err) => {
-  console.error("\nBackfill failed:", err);
-  process.exit(1);
-});
+// Get postgres.js connection for prod database
+function getProdDb() {
+  const connectionString = process.env.POSTGRES_URL;
+  if (!connectionString) {
+    throw new Error("POSTGRES_URL environment variable is required for --prod mode");
+  }
+  return postgres(connectionString, { ssl: "require" });
+}
+
+interface GapInfo {
+  missingHour: Date;
+  estimatedStartSlot: number;
+  estimatedEndSlot: number;
+}
+
+async function findGaps(useProd: boolean): Promise<GapInfo[]> {
+  console.log("Finding gaps in hourly data...");
+
+  if (useProd) {
+    const sql = getProdDb();
+
+    // Get missing hours
+    const gaps = await sql`
+      WITH hours AS (
+        SELECT generate_series(
+          (SELECT MIN(bucket_hour) FROM account_stats_hourly),
+          (SELECT MAX(bucket_hour) FROM account_stats_hourly),
+          interval '1 hour'
+        ) AS hour
+      ),
+      existing AS (
+        SELECT DISTINCT bucket_hour FROM account_stats_hourly
+      )
+      SELECT hours.hour as missing_hour
+      FROM hours
+      LEFT JOIN existing ON hours.hour = existing.bucket_hour
+      WHERE existing.bucket_hour IS NULL
+      ORDER BY hours.hour
+    `;
+
+    // Get a reference point: latest slot and its block_time
+    const reference = await sql`
+      SELECT slot, block_time FROM block_snapshots
+      ORDER BY slot DESC LIMIT 1
+    `;
+
+    await sql.end();
+
+    if (!reference[0]) {
+      console.log("No reference block found in snapshots");
+      return [];
+    }
+
+    const refSlot = parseInt(reference[0].slot, 10);
+    const refTime = new Date(reference[0].block_time).getTime();
+
+    // Estimate slots for each missing hour
+    const gapInfos: GapInfo[] = [];
+    for (const gap of gaps) {
+      const missingHour = new Date(gap.missing_hour);
+      const hourStart = missingHour.getTime();
+      const hourEnd = hourStart + 3600 * 1000;
+
+      // ~2.5 blocks per second, so ~400ms per slot
+      const msPerSlot = 400;
+      const startSlotOffset = Math.floor((refTime - hourEnd) / msPerSlot);
+      const endSlotOffset = Math.floor((refTime - hourStart) / msPerSlot);
+
+      gapInfos.push({
+        missingHour,
+        estimatedStartSlot: refSlot - endSlotOffset,
+        estimatedEndSlot: refSlot - startSlotOffset,
+      });
+    }
+
+    return gapInfos;
+  } else {
+    // Use local Bun db
+    const db = getDb();
+    const gaps = await db.query<{ missing_hour: string }>(`
+      WITH hours AS (
+        SELECT generate_series(
+          (SELECT MIN(bucket_hour) FROM account_stats_hourly),
+          (SELECT MAX(bucket_hour) FROM account_stats_hourly),
+          interval '1 hour'
+        ) AS hour
+      ),
+      existing AS (
+        SELECT DISTINCT bucket_hour FROM account_stats_hourly
+      )
+      SELECT hours.hour as missing_hour
+      FROM hours
+      LEFT JOIN existing ON hours.hour = existing.bucket_hour
+      WHERE existing.bucket_hour IS NULL
+      ORDER BY hours.hour
+    `);
+
+    const reference = await db.query<{ slot: string; block_time: string }>(
+      "SELECT slot, block_time FROM block_snapshots ORDER BY slot DESC LIMIT 1"
+    );
+
+    if (!reference[0]) {
+      console.log("No reference block found in snapshots");
+      return [];
+    }
+
+    const refSlot = parseInt(reference[0].slot, 10);
+    const refTime = new Date(reference[0].block_time).getTime();
+
+    const gapInfos: GapInfo[] = [];
+    for (const gap of gaps) {
+      const missingHour = new Date(gap.missing_hour);
+      const hourStart = missingHour.getTime();
+      const hourEnd = hourStart + 3600 * 1000;
+
+      const msPerSlot = 400;
+      const startSlotOffset = Math.floor((refTime - hourEnd) / msPerSlot);
+      const endSlotOffset = Math.floor((refTime - hourStart) / msPerSlot);
+
+      gapInfos.push({
+        missingHour,
+        estimatedStartSlot: refSlot - endSlotOffset,
+        estimatedEndSlot: refSlot - startSlotOffset,
+      });
+    }
+
+    return gapInfos;
+  }
+}
+
+async function backfillSlotRange(
+  startSlot: number,
+  endSlot: number,
+  connection: Connection,
+  useProd: boolean
+): Promise<{ processed: number; successful: number }> {
+  let processed = 0;
+  let successful = 0;
+
+  const prodDb = useProd ? getProdDb() : null;
+
+  for (let slot = startSlot; slot <= endSlot; slot += BLOCKS_PER_BATCH) {
+    const batchEnd = Math.min(slot + BLOCKS_PER_BATCH - 1, endSlot);
+    const slots: number[] = [];
+    for (let s = slot; s <= batchEnd; s++) {
+      slots.push(s);
+    }
+
+    const results = await processWithPool(
+      slots,
+      async (s) => {
+        const blockData = await processBlock(connection, s);
+        if (blockData) {
+          await upsertHourlyStats(blockData);
+          if (s % 100 === 0) {
+            await saveBlockSnapshot(blockData);
+          }
+          return true;
+        }
+        return false;
+      },
+      CONCURRENT_REQUESTS
+    );
+
+    // Flush to appropriate database
+    if (useProd && prodDb && pendingWrites.length > 0) {
+      await flushPendingWritesToProd(prodDb);
+    } else {
+      await flushPendingWrites();
+    }
+
+    processed += slots.length;
+    successful += results.filter(Boolean).length;
+
+    const progress = (((slot - startSlot) / (endSlot - startSlot)) * 100).toFixed(1);
+    console.log(`  Progress: ${progress}% | Slot: ${slot} | Successful: ${successful}`);
+  }
+
+  if (prodDb) {
+    await prodDb.end();
+  }
+
+  return { processed, successful };
+}
+
+async function flushPendingWritesToProd(sql: ReturnType<typeof postgres>): Promise<void> {
+  if (pendingWrites.length === 0) return;
+
+  // Aggregate by (address, bucketHour)
+  const aggregated = new Map<string, {
+    address: string;
+    bucketHour: string;
+    totalCUs: number;
+    txCount: number;
+    maxPercentOfLimit: number;
+    sumPercentOfLimit: number;
+    blockCount: number;
+    blockCUs: number;
+  }>();
+
+  for (const w of pendingWrites) {
+    const key = `${w.address}|${w.bucketHour}`;
+    const existing = aggregated.get(key);
+    if (existing) {
+      existing.totalCUs += w.totalCUs;
+      existing.txCount += w.txCount;
+      existing.maxPercentOfLimit = Math.max(existing.maxPercentOfLimit, w.percentOfLimit);
+      existing.sumPercentOfLimit += w.percentOfLimit;
+      existing.blockCount += 1;
+      existing.blockCUs += w.blockCUs;
+    } else {
+      aggregated.set(key, {
+        address: w.address,
+        bucketHour: w.bucketHour,
+        totalCUs: w.totalCUs,
+        txCount: w.txCount,
+        maxPercentOfLimit: w.percentOfLimit,
+        sumPercentOfLimit: w.percentOfLimit,
+        blockCount: 1,
+        blockCUs: w.blockCUs,
+      });
+    }
+  }
+
+  const rows = Array.from(aggregated.values());
+
+  // Process in chunks
+  const chunkSize = 200;
+  for (let i = 0; i < rows.length; i += chunkSize) {
+    const chunk = rows.slice(i, i + chunkSize);
+    const values: any[] = [];
+    const placeholders: string[] = [];
+
+    chunk.forEach((w, idx) => {
+      const offset = idx * 8;
+      const avgPercent = w.sumPercentOfLimit / w.blockCount;
+      placeholders.push(`($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4}, $${offset + 5}, $${offset + 6}, $${offset + 7}, $${offset + 8})`);
+      values.push(w.address, w.bucketHour, w.totalCUs, w.blockCount, w.txCount, w.maxPercentOfLimit, avgPercent, w.blockCUs);
+    });
+
+    await sql.unsafe(
+      `INSERT INTO account_stats_hourly
+        (account_address, bucket_hour, total_cu, block_count, tx_count, max_percent_of_limit, avg_percent_of_limit, total_block_cu)
+      VALUES ${placeholders.join(", ")}
+      ON CONFLICT (account_address, bucket_hour) DO UPDATE SET
+        total_cu = account_stats_hourly.total_cu + EXCLUDED.total_cu,
+        block_count = account_stats_hourly.block_count + EXCLUDED.block_count,
+        tx_count = account_stats_hourly.tx_count + EXCLUDED.tx_count,
+        max_percent_of_limit = GREATEST(account_stats_hourly.max_percent_of_limit, EXCLUDED.max_percent_of_limit),
+        avg_percent_of_limit = (account_stats_hourly.avg_percent_of_limit * account_stats_hourly.block_count + EXCLUDED.avg_percent_of_limit * EXCLUDED.block_count)
+                               / (account_stats_hourly.block_count + EXCLUDED.block_count),
+        total_block_cu = account_stats_hourly.total_block_cu + EXCLUDED.total_block_cu`,
+      values
+    );
+  }
+
+  pendingWrites = [];
+}
+
+async function fillGaps() {
+  const { useProd } = parseArgs();
+
+  console.log(`\nFill Gaps Mode`);
+  console.log(`  Database: ${useProd ? "PRODUCTION (POSTGRES_URL)" : "Local"}`);
+  console.log(`  Concurrent requests: ${CONCURRENT_REQUESTS}\n`);
+
+  const gaps = await findGaps(useProd);
+
+  if (gaps.length === 0) {
+    console.log("No gaps found! Database is complete.");
+    return;
+  }
+
+  console.log(`Found ${gaps.length} missing hours:\n`);
+  for (const gap of gaps) {
+    console.log(`  ${gap.missingHour.toISOString()} → slots ${gap.estimatedStartSlot} to ${gap.estimatedEndSlot} (~${gap.estimatedEndSlot - gap.estimatedStartSlot} blocks)`);
+  }
+
+  const rpcUrl = process.env.SOLANA_RPC_URL || DEFAULT_RPC_URL;
+  const connection = new Connection(rpcUrl, { commitment: "confirmed" });
+
+  console.log(`\nStarting backfill...\n`);
+
+  let totalProcessed = 0;
+  let totalSuccessful = 0;
+
+  for (const gap of gaps) {
+    console.log(`\nFilling gap: ${gap.missingHour.toISOString()}`);
+    const { processed, successful } = await backfillSlotRange(
+      gap.estimatedStartSlot,
+      gap.estimatedEndSlot,
+      connection,
+      useProd
+    );
+    totalProcessed += processed;
+    totalSuccessful += successful;
+    console.log(`  Completed: ${successful}/${processed} blocks`);
+  }
+
+  console.log(`\n✅ Gap filling complete!`);
+  console.log(`  Total blocks processed: ${totalProcessed}`);
+  console.log(`  Total successful: ${totalSuccessful}`);
+  console.log(`\nRun rollup.ts to aggregate the data.`);
+}
+
+// Main entry point
+const { fillGaps: shouldFillGaps } = parseArgs();
+
+if (shouldFillGaps) {
+  fillGaps().catch((err) => {
+    console.error("\nGap filling failed:", err);
+    process.exit(1);
+  });
+} else {
+  backfill().catch((err) => {
+    console.error("\nBackfill failed:", err);
+    process.exit(1);
+  });
+}
