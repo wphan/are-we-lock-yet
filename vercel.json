@@ -6,6 +6,10 @@
     {
       "path": "/api/ingest",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/rollup",
+      "schedule": "30 * * * *"
     }
   ]
 }

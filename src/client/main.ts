@@ -5,6 +5,7 @@ import { renderTransactionList, setAccountFilters, setProgramFilters } from './c
 import { renderFeeChart, setProgramFiltersForChart } from './components/fee-chart.ts';
 import { renderProgramFilter, getSelectedPrograms, clearProgramFilters } from './components/program-filter.ts';
 import { initAccountFilter, getSelectedAccounts, clearAccountFilters, toggleAccount, updateAccountFilterDisplay, setSelectedAccounts } from './components/account-filter.ts';
+import { renderCuPriceHistogram } from './components/cu-price-histogram.ts';
 
 let currentBlock: BlockAnalysis | null = null;
 
@@ -24,6 +25,39 @@ function showError(message: string) {
   }
 }
 
+function formatCU(value: number): string {
+  if (value >= 1_000_000) {
+    return `${(value / 1_000_000).toFixed(1)}M`;
+  }
+  if (value >= 1_000) {
+    return `${(value / 1_000).toFixed(1)}K`;
+  }
+  return value.toLocaleString();
+}
+
+function formatRelativeTime(timestamp: number): string {
+  const now = Date.now() / 1000;
+  const diff = now - timestamp;
+
+  if (diff < 60) {
+    return `${Math.floor(diff)}s ago`;
+  }
+  if (diff < 3600) {
+    return `${Math.floor(diff / 60)}m ago`;
+  }
+  if (diff < 86400) {
+    return `${Math.floor(diff / 3600)}h ago`;
+  }
+  return `${Math.floor(diff / 86400)}d ago`;
+}
+
+function formatBlockTime(timestamp: number): string {
+  const date = new Date(timestamp * 1000);
+  const utc = date.toISOString().replace('T', ' ').replace('.000Z', ' UTC');
+  const relative = formatRelativeTime(timestamp);
+  return `${utc} (${relative})`;
+}
+
 function updateStats(block: BlockAnalysis) {
   const setVal = (id: string, value: string) => {
     const el = document.getElementById(id);
@@ -34,11 +68,28 @@ function updateStats(block: BlockAnalysis) {
   if (slotEl) {
     slotEl.innerHTML = `<a href="https://solscan.io/block/${block.slot}" target="_blank">${block.slot.toLocaleString()}</a>`;
   }
+
+  // Display block time
+  const timeEl = document.getElementById('stat-time');
+  if (timeEl) {
+    if (block.blockTime) {
+      timeEl.textContent = formatBlockTime(block.blockTime);
+    } else {
+      timeEl.textContent = '';
+    }
+  }
+
   setVal('stat-leader', block.leader ? `${block.leader.slice(0, 4)}...${block.leader.slice(-4)}` : '—');
   setVal('stat-txs', block.totalTransactions.toLocaleString());
   setVal('stat-success', block.successfulTransactions.toLocaleString());
   setVal('stat-failed', block.failedTransactions.toLocaleString());
   setVal('stat-votes', block.voteTransactions.toLocaleString());
+
+  // Calculate CU stats from transactions
+  const totalCuRequested = block.transactions.reduce((sum, tx) => sum + tx.cuLimit, 0);
+  const totalCuUsed = block.transactions.reduce((sum, tx) => sum + tx.cuUsed, 0);
+  setVal('stat-cu-requested', formatCU(totalCuRequested));
+  setVal('stat-cu-used', formatCU(totalCuUsed));
 
   // Add click handler for leader to copy full address
   const leaderEl = document.getElementById('stat-leader');
@@ -147,6 +198,7 @@ function render() {
   }
 
   const selectedAccounts = getSelectedAccounts();
+  renderCuPriceHistogram(currentBlock.transactions);
   renderFeeChart(currentBlock.transactions, selectedAccounts);
   renderAccountTable(currentBlock.accountStats, handleAccountClick);
   renderTransactionList(currentBlock.transactions);

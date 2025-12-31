@@ -24,6 +24,7 @@
         <div class="stat-card">
           <span class="stat-label">Slot</span>
           <span class="stat-value" id="stat-slot">—</span>
+          <span class="stat-time" id="stat-time"></span>
         </div>
         <div class="stat-card">
           <span class="stat-label">Leader</span>
@@ -46,6 +47,23 @@
           <span class="stat-label">Votes</span>
           <span class="stat-value vote" id="stat-votes">—</span>
         </div>
+        <div class="stat-card">
+          <span class="stat-label">CU Requested</span>
+          <span class="stat-value mono" id="stat-cu-requested">—</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">CU Used</span>
+          <span class="stat-value mono" id="stat-cu-used">—</span>
+        </div>
+      </section>
+
+      <section class="histogram-section" id="cu-price-histogram">
+        <div class="section-header">
+          <h2 class="section-title">CU Price Distribution</h2>
+          <span class="section-subtitle">Priority fee in micro-lamports per CU</span>
+        </div>
+        <div class="histogram-stats" id="histogram-stats"></div>
+        <div class="histogram-container" id="histogram-container"></div>
       </section>
 
       <section class="chart-section">
