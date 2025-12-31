@@ -29,6 +29,26 @@ const DEFAULT_RPC_URL = "https://api.mainnet-beta.solana.com";
 
 const STATE_FILE = "backfill-state.json";
 
+// Track database operations for usage monitoring
+let dbStats = {
+  queries: 0,
+  rowsWritten: 0,
+  startTime: Date.now(),
+};
+
+function resetDbStats() {
+  dbStats = { queries: 0, rowsWritten: 0, startTime: Date.now() };
+}
+
+function logDbStats(label: string) {
+  const elapsed = ((Date.now() - dbStats.startTime) / 1000).toFixed(1);
+  console.log(`\n[DB STATS] ${label}`);
+  console.log(`  Queries: ${dbStats.queries.toLocaleString()}`);
+  console.log(`  Rows written: ${dbStats.rowsWritten.toLocaleString()}`);
+  console.log(`  Elapsed: ${elapsed}s`);
+  console.log(`  Queries/sec: ${(dbStats.queries / parseFloat(elapsed)).toFixed(1)}`);
+}
+
 interface BackfillState {
   startSlot: number;
   currentSlot: number;
@@ -344,6 +364,8 @@ async function flushPendingWrites(): Promise<void> {
         total_block_cu = account_stats_hourly.total_block_cu + EXCLUDED.total_block_cu`,
       values
     );
+    dbStats.queries++;
+    dbStats.rowsWritten += chunk.length;
   }
 
   pendingWrites = [];
@@ -367,6 +389,8 @@ async function saveBlockSnapshot(blockData: BlockData): Promise<void> {
      ON CONFLICT (slot) DO NOTHING`,
     [blockData.slot, blockTime, blockData.totalCUs, JSON.stringify(topAccounts)]
   );
+  dbStats.queries++;
+  dbStats.rowsWritten++;
 }
 
 function formatDuration(ms: number): string {
@@ -393,6 +417,7 @@ function estimateEta(state: BackfillState, blocksPerSecond: number): string {
 async function backfill() {
   const { days } = parseArgs();
   const maxBlocks = days * BLOCKS_PER_DAY;
+  resetDbStats();
 
   console.log(`\nBackfill Configuration:`);
   console.log(`  Days: ${days}`);
@@ -487,7 +512,7 @@ async function backfill() {
         `Slot: ${state.currentSlot.toLocaleString()} | ` +
         `Blocks: ${state.successfulBlocks.toLocaleString()} | ` +
         `Speed: ${blocksPerSecond.toFixed(1)}/s | ` +
-        `Batch: ${batchDuration}ms | ` +
+        `DB: ${dbStats.queries}q/${dbStats.rowsWritten}r | ` +
         `ETA: ${eta}`
     );
 
@@ -503,6 +528,7 @@ async function backfill() {
   console.log(`\nBackfill complete!`);
   console.log(`  Total blocks processed: ${state.successfulBlocks.toLocaleString()}`);
   console.log(`  Total duration: ${formatDuration(totalDuration)}`);
+  logDbStats("Final");
 
   // Clean up state file
   await Bun.file(STATE_FILE).unlink().catch(() => {});
@@ -684,7 +710,7 @@ async function backfillSlotRange(
     successful += results.filter(Boolean).length;
 
     const progress = (((slot - startSlot) / (endSlot - startSlot)) * 100).toFixed(1);
-    console.log(`  Progress: ${progress}% | Slot: ${slot} | Successful: ${successful}`);
+    console.log(`  Progress: ${progress}% | Slot: ${slot} | Blocks: ${successful} | DB: ${dbStats.queries} queries, ${dbStats.rowsWritten} rows`);
   }
 
   if (prodDb) {
@@ -763,6 +789,8 @@ async function flushPendingWritesToProd(sql: ReturnType<typeof postgres>): Promi
         total_block_cu = account_stats_hourly.total_block_cu + EXCLUDED.total_block_cu`,
       values
     );
+    dbStats.queries++;
+    dbStats.rowsWritten += chunk.length;
   }
 
   pendingWrites = [];
@@ -770,6 +798,7 @@ async function flushPendingWritesToProd(sql: ReturnType<typeof postgres>): Promi
 
 async function fillGaps() {
   const { useProd } = parseArgs();
+  resetDbStats();
 
   console.log(`\nFill Gaps Mode`);
   console.log(`  Database: ${useProd ? "PRODUCTION (POSTGRES_URL)" : "Local"}`);
@@ -811,6 +840,7 @@ async function fillGaps() {
   console.log(`\n✅ Gap filling complete!`);
   console.log(`  Total blocks processed: ${totalProcessed}`);
   console.log(`  Total successful: ${totalSuccessful}`);
+  logDbStats("Final");
   console.log(`\nRun rollup.ts to aggregate the data.`);
 }
 

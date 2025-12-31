@@ -25,6 +25,9 @@ const BATCH_SIZE = 10; // Smaller batches to avoid RPC rate limits
 
 let sql: ReturnType<typeof postgres> | null = null;
 
+// Track database operations for usage monitoring
+let dbStats = { queries: 0, rowsWritten: 0 };
+
 function getDb() {
   if (sql) return sql;
   const connectionString = process.env.POSTGRES_URL;
@@ -221,12 +224,15 @@ async function saveBlockSnapshot(db: ReturnType<typeof postgres>, blockData: Blo
      ON CONFLICT (slot) DO NOTHING`,
     [blockData.slot, blockTime, blockData.totalCUs, JSON.stringify(topAccounts)]
   );
+  dbStats.queries++;
+  dbStats.rowsWritten++;
 }
 
 async function getLastProcessedSlot(db: ReturnType<typeof postgres>): Promise<number | null> {
   const result = await db.unsafe(
     "SELECT last_processed_slot FROM ingest_state WHERE id = 1"
   );
+  dbStats.queries++;
   if (!Array.isArray(result) || result.length === 0) return null;
   return parseInt(result[0].last_processed_slot, 10);
 }
@@ -240,6 +246,8 @@ async function updateLastProcessedSlot(db: ReturnType<typeof postgres>, slot: nu
        updated_at = EXCLUDED.updated_at`,
     [slot]
   );
+  dbStats.queries++;
+  dbStats.rowsWritten++;
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -261,6 +269,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   const startTime = Date.now();
+  dbStats = { queries: 0, rowsWritten: 0 }; // Reset stats for this run
 
   try {
     const db = getDb();
@@ -421,6 +430,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             total_block_cu = account_stats_hourly.total_block_cu + EXCLUDED.total_block_cu`,
           values
         );
+        dbStats.queries++;
+        dbStats.rowsWritten += entries.length;
       }
       const dbMs = Date.now() - dbStart;
 
@@ -432,12 +443,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       // Log every batch with timing breakdown
       const totalElapsed = Date.now() - startTime;
-      console.log(`[BATCH ${batchCount}] ${validBlocks.length}/${slots.length} blocks, ${upsertedRows} rows | fetch=${fetchMs}ms db=${dbMs}ms | total=${(totalElapsed / 1000).toFixed(0)}s`);
+      console.log(`[BATCH ${batchCount}] ${validBlocks.length}/${slots.length} blocks, ${upsertedRows} rows | fetch=${fetchMs}ms db=${dbMs}ms | total=${(totalElapsed / 1000).toFixed(0)}s | DB: ${dbStats.queries}q/${dbStats.rowsWritten}r`);
     }
 
     const duration = Date.now() - startTime;
     const blocksBehind = currentSlot - lastProcessedSlot;
     const blocksPerSecond = processed > 0 ? (processed / (duration / 1000)).toFixed(1) : "0";
+
+    console.log(`[COMPLETE] ${processed} blocks, ${dbStats.queries} queries, ${dbStats.rowsWritten} rows written`);
 
     return res.status(200).json({
       success: true,
@@ -451,6 +464,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       blocksPerSecond,
       exitedEarly,
       timeoutMs: FUNCTION_TIMEOUT_MS,
+      dbStats: {
+        queries: dbStats.queries,
+        rowsWritten: dbStats.rowsWritten,
+      },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";

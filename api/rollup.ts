@@ -6,6 +6,9 @@ import postgres from "postgres";
 
 let sql: ReturnType<typeof postgres> | null = null;
 
+// Track database operations for usage monitoring
+let dbStats = { queries: 0, rowsAffected: 0 };
+
 function getDb() {
   if (sql) return sql;
   const connectionString = process.env.POSTGRES_URL;
@@ -39,13 +42,16 @@ async function rollupDaily(db: ReturnType<typeof postgres>): Promise<number> {
       avg_percent_of_limit = EXCLUDED.avg_percent_of_limit,
       total_block_cu = EXCLUDED.total_block_cu
   `);
+  dbStats.queries++;
+  dbStats.rowsAffected += result.count || 0;
 
   const count = await db.unsafe("SELECT COUNT(DISTINCT bucket_day) as count FROM account_stats_daily");
+  dbStats.queries++;
   return parseInt(count[0]?.count || "0", 10);
 }
 
 async function rollupWeekly(db: ReturnType<typeof postgres>): Promise<number> {
-  await db.unsafe(`
+  const result = await db.unsafe(`
     INSERT INTO account_stats_weekly
       (account_address, bucket_week, total_cu, block_count, tx_count, max_percent_of_limit, avg_percent_of_limit, total_block_cu)
     SELECT
@@ -67,8 +73,11 @@ async function rollupWeekly(db: ReturnType<typeof postgres>): Promise<number> {
       avg_percent_of_limit = EXCLUDED.avg_percent_of_limit,
       total_block_cu = EXCLUDED.total_block_cu
   `);
+  dbStats.queries++;
+  dbStats.rowsAffected += result.count || 0;
 
   const count = await db.unsafe("SELECT COUNT(DISTINCT bucket_week) as count FROM account_stats_weekly");
+  dbStats.queries++;
   return parseInt(count[0]?.count || "0", 10);
 }
 
@@ -78,24 +87,32 @@ async function pruneOldData(db: ReturnType<typeof postgres>): Promise<{ hourly: 
     DELETE FROM account_stats_hourly
     WHERE bucket_hour < NOW() - INTERVAL '48 hours'
   `);
+  dbStats.queries++;
+  dbStats.rowsAffected += hourlyResult.count || 0;
 
   // Keep daily data for 21 days (buffer for 14d view)
   const dailyResult = await db.unsafe(`
     DELETE FROM account_stats_daily
     WHERE bucket_day < CURRENT_DATE - INTERVAL '21 days'
   `);
+  dbStats.queries++;
+  dbStats.rowsAffected += dailyResult.count || 0;
 
   // Keep weekly data for 60 days
   const weeklyResult = await db.unsafe(`
     DELETE FROM account_stats_weekly
     WHERE bucket_week < CURRENT_DATE - INTERVAL '60 days'
   `);
+  dbStats.queries++;
+  dbStats.rowsAffected += weeklyResult.count || 0;
 
   // Keep block snapshots for 14 days
   const snapshotResult = await db.unsafe(`
     DELETE FROM block_snapshots
     WHERE block_time < NOW() - INTERVAL '14 days'
   `);
+  dbStats.queries++;
+  dbStats.rowsAffected += snapshotResult.count || 0;
 
   return {
     hourly: hourlyResult.count || 0,
@@ -107,9 +124,13 @@ async function pruneOldData(db: ReturnType<typeof postgres>): Promise<{ hourly: 
 
 async function getTableCounts(db: ReturnType<typeof postgres>) {
   const hourly = await db.unsafe("SELECT COUNT(*) as count FROM account_stats_hourly");
+  dbStats.queries++;
   const daily = await db.unsafe("SELECT COUNT(*) as count FROM account_stats_daily");
+  dbStats.queries++;
   const weekly = await db.unsafe("SELECT COUNT(*) as count FROM account_stats_weekly");
+  dbStats.queries++;
   const snapshots = await db.unsafe("SELECT COUNT(*) as count FROM block_snapshots");
+  dbStats.queries++;
 
   return {
     hourly: parseInt(hourly[0]?.count || "0", 10),
@@ -138,6 +159,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   const startTime = Date.now();
+  dbStats = { queries: 0, rowsAffected: 0 }; // Reset stats for this run
 
   try {
     const db = getDb();
@@ -166,7 +188,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const counts = await getTableCounts(db);
 
     const duration = Date.now() - startTime;
-    console.log(`[ROLLUP] Complete in ${duration}ms`);
+    console.log(`[ROLLUP] Complete in ${duration}ms | DB: ${dbStats.queries} queries, ${dbStats.rowsAffected} rows affected`);
 
     return res.status(200).json({
       success: true,
@@ -180,6 +202,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       pruned,
       pruneMs,
       tableCounts: counts,
+      dbStats: {
+        queries: dbStats.queries,
+        rowsAffected: dbStats.rowsAffected,
+      },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
