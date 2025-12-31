@@ -156,6 +156,82 @@ function closeTxDetail() {
   panel?.classList.remove('visible');
 }
 
+// Only aggregate when transaction count exceeds this threshold
+const AGGREGATION_THRESHOLD = 1500;
+// Target number of bars when aggregating
+const TARGET_BARS = 1000;
+
+interface AggregatedBar {
+  startIndex: number;
+  endIndex: number;
+  count: number;
+  maxValue: number;
+  avgValue: number;
+  hasVote: boolean;
+  hasFailed: boolean;
+  hasSuccess: boolean;
+  matchesAccountFilter: boolean;
+  matchesProgramFilter: boolean;
+  transactions: TransactionMetrics[];
+}
+
+function aggregateTransactions(
+  transactions: TransactionMetrics[],
+  metric: MetricKey,
+  accountFilters: Set<string>,
+  programFilters: Set<string>
+): AggregatedBar[] {
+  if (transactions.length <= AGGREGATION_THRESHOLD) {
+    // No aggregation needed - return individual bars
+    return transactions.map(tx => ({
+      startIndex: tx.index,
+      endIndex: tx.index,
+      count: 1,
+      maxValue: tx[metric] as number,
+      avgValue: tx[metric] as number,
+      hasVote: tx.isVote,
+      hasFailed: tx.status === 'failed',
+      hasSuccess: tx.status === 'success' && !tx.isVote,
+      matchesAccountFilter: accountFilters.size === 0 || tx.writableAccounts.some(addr => accountFilters.has(addr)),
+      matchesProgramFilter: programFilters.size === 0 || tx.programs.some(p => programFilters.has(p)),
+      transactions: [tx],
+    }));
+  }
+
+  // Aggregate into buckets
+  const bucketSize = Math.ceil(transactions.length / TARGET_BARS);
+  const buckets: AggregatedBar[] = [];
+
+  for (let i = 0; i < transactions.length; i += bucketSize) {
+    const bucket = transactions.slice(i, i + bucketSize);
+    const values = bucket.map(tx => tx[metric] as number);
+
+    buckets.push({
+      startIndex: bucket[0]!.index,
+      endIndex: bucket[bucket.length - 1]!.index,
+      count: bucket.length,
+      maxValue: Math.max(...values),
+      avgValue: values.reduce((a, b) => a + b, 0) / values.length,
+      hasVote: bucket.some(tx => tx.isVote),
+      hasFailed: bucket.some(tx => tx.status === 'failed'),
+      hasSuccess: bucket.some(tx => tx.status === 'success' && !tx.isVote),
+      matchesAccountFilter: accountFilters.size === 0 || bucket.some(tx => tx.writableAccounts.some(addr => accountFilters.has(addr))),
+      matchesProgramFilter: programFilters.size === 0 || bucket.some(tx => tx.programs.some(p => programFilters.has(p))),
+      transactions: bucket,
+    });
+  }
+
+  return buckets;
+}
+
+function getAggregatedBarColor(bar: AggregatedBar): string {
+  // Priority: failed > success > vote (show most important status)
+  if (bar.hasFailed) return 'var(--color-failed)';
+  if (bar.hasSuccess) return 'var(--color-success)';
+  if (bar.hasVote) return 'var(--color-vote)';
+  return 'var(--color-success)';
+}
+
 export function renderFeeChart(transactions: TransactionMetrics[], accountFilters: Set<string> = new Set()) {
   const container = document.getElementById('fee-chart');
   if (!container) return;
@@ -171,6 +247,10 @@ export function renderFeeChart(transactions: TransactionMetrics[], accountFilter
 
   // Sort by index to maintain block order
   const sorted = [...filtered].sort((a, b) => a.index - b.index);
+
+  // Aggregate if too many transactions
+  const aggregatedBars = aggregateTransactions(sorted, state.metric, accountFilters, currentProgramFilters);
+  const isAggregated = sorted.length > AGGREGATION_THRESHOLD;
 
   // Get values for the selected metric
   const values = sorted.map(tx => tx[state.metric] as number);
@@ -255,18 +335,23 @@ export function renderFeeChart(transactions: TransactionMetrics[], accountFilter
         </div>
       </div>
       <div class="chart-bars" id="chart-bars">
-        ${sorted.map((tx, i) => {
-          const value = tx[state.metric] as number;
-          const height = getHeight(value);
-          const matchesAccountFilter = accountFilters.size > 0 && tx.writableAccounts.some(addr => accountFilters.has(addr));
-          const matchesProgramFilter = currentProgramFilters.size > 0 && tx.programs.some(p => currentProgramFilters.has(p));
+        ${aggregatedBars.map((bar) => {
+          const height = getHeight(bar.maxValue);
           const hasFilters = accountFilters.size > 0 || currentProgramFilters.size > 0;
-          const matchesFilter = (accountFilters.size === 0 || matchesAccountFilter) && (currentProgramFilters.size === 0 || matchesProgramFilter);
+          const matchesFilter = bar.matchesAccountFilter && bar.matchesProgramFilter;
+          const tooltip = bar.count === 1
+            ? `Index: ${bar.startIndex} | ${METRIC_LABELS[state.metric]}: ${formatValue(bar.maxValue)} | ${bar.hasVote ? 'Vote' : bar.hasFailed ? 'failed' : 'success'}`
+            : `Txs ${bar.startIndex}-${bar.endIndex} (${bar.count}) | Max: ${formatValue(bar.maxValue)} | Avg: ${formatValue(bar.avgValue)}`;
+          const color = bar.count === 1
+            ? getBarColor(bar.transactions[0]!)
+            : getAggregatedBarColor(bar);
           return `
             <div class="bar-wrapper${hasFilters && !matchesFilter ? ' dimmed' : ''}${hasFilters && matchesFilter ? ' highlighted' : ''}"
-                 data-index="${tx.index}"
-                 data-tooltip="Index: ${tx.index} | ${METRIC_LABELS[state.metric]}: ${formatValue(value)} | ${tx.isVote ? 'Vote' : tx.status}">
-              <div class="bar" style="height: ${height}%; background: ${getBarColor(tx)};"></div>
+                 data-start-index="${bar.startIndex}"
+                 data-end-index="${bar.endIndex}"
+                 data-count="${bar.count}"
+                 data-tooltip="${tooltip}">
+              <div class="bar" style="height: ${height}%; background: ${color};"></div>
             </div>
           `;
         }).join('')}
@@ -276,10 +361,8 @@ export function renderFeeChart(transactions: TransactionMetrics[], accountFilter
       <div class="chart-markers">
         <div class="chart-y-axis-spacer"></div>
         <div class="markers-row">
-          ${sorted.map((tx) => {
-            const matchesAccountFilter = accountFilters.size === 0 || tx.writableAccounts.some(addr => accountFilters.has(addr));
-            const matchesProgramFilter = currentProgramFilters.size === 0 || tx.programs.some(p => currentProgramFilters.has(p));
-            const matches = matchesAccountFilter && matchesProgramFilter;
+          ${aggregatedBars.map((bar) => {
+            const matches = bar.matchesAccountFilter && bar.matchesProgramFilter;
             return `<div class="marker-slot">${matches ? '<div class="marker"></div>' : ''}</div>`;
           }).join('')}
         </div>
@@ -289,6 +372,7 @@ export function renderFeeChart(transactions: TransactionMetrics[], accountFilter
       <span class="legend-item"><span class="legend-color" style="background: var(--color-success)"></span> Success</span>
       <span class="legend-item"><span class="legend-color" style="background: var(--color-failed)"></span> Failed</span>
       <span class="legend-item"><span class="legend-color" style="background: var(--color-vote)"></span> Vote</span>
+      ${isAggregated ? `<span class="legend-item aggregated-note">(${sorted.length} txs aggregated into ${aggregatedBars.length} bars)</span>` : ''}
     </div>
   `;
 
@@ -314,9 +398,19 @@ export function renderFeeChart(transactions: TransactionMetrics[], accountFilter
   // Bar click handlers
   container.querySelectorAll('.bar-wrapper').forEach((bar) => {
     bar.addEventListener('click', () => {
-      const index = parseInt((bar as HTMLElement).dataset.index ?? '', 10);
-      const tx = currentTransactions.find(t => t.index === index);
-      if (tx) showTxDetail(tx);
+      const el = bar as HTMLElement;
+      const count = parseInt(el.dataset.count ?? '1', 10);
+      const startIndex = parseInt(el.dataset.startIndex ?? '', 10);
+
+      if (count === 1) {
+        // Single transaction - show detail
+        const tx = currentTransactions.find(t => t.index === startIndex);
+        if (tx) showTxDetail(tx);
+      } else {
+        // Aggregated bar - show first transaction (user can navigate via tx list)
+        const tx = currentTransactions.find(t => t.index === startIndex);
+        if (tx) showTxDetail(tx);
+      }
     });
   });
 }

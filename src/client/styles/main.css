@@ -709,6 +709,11 @@ tr.clickable {
   border-radius: 2px;
 }
 
+.aggregated-note {
+  font-style: italic;
+  opacity: 0.7;
+}
+
 /* Transaction Detail Panel */
 .tx-detail-panel {
   position: fixed;
