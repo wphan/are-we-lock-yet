@@ -170,6 +170,9 @@ interface AggregatedBar {
   hasVote: boolean;
   hasFailed: boolean;
   hasSuccess: boolean;
+  successCount: number;
+  failedCount: number;
+  voteCount: number;
   matchesAccountFilter: boolean;
   matchesProgramFilter: boolean;
   transactions: TransactionMetrics[];
@@ -192,6 +195,9 @@ function aggregateTransactions(
       hasVote: tx.isVote,
       hasFailed: tx.status === 'failed',
       hasSuccess: tx.status === 'success' && !tx.isVote,
+      successCount: tx.status === 'success' && !tx.isVote ? 1 : 0,
+      failedCount: tx.status === 'failed' ? 1 : 0,
+      voteCount: tx.isVote ? 1 : 0,
       matchesAccountFilter: accountFilters.size === 0 || tx.writableAccounts.some(addr => accountFilters.has(addr)),
       matchesProgramFilter: programFilters.size === 0 || tx.programs.some(p => programFilters.has(p)),
       transactions: [tx],
@@ -205,6 +211,9 @@ function aggregateTransactions(
   for (let i = 0; i < transactions.length; i += bucketSize) {
     const bucket = transactions.slice(i, i + bucketSize);
     const values = bucket.map(tx => tx[metric] as number);
+    const successCount = bucket.filter(tx => tx.status === 'success' && !tx.isVote).length;
+    const failedCount = bucket.filter(tx => tx.status === 'failed').length;
+    const voteCount = bucket.filter(tx => tx.isVote).length;
 
     buckets.push({
       startIndex: bucket[0]!.index,
@@ -212,9 +221,12 @@ function aggregateTransactions(
       count: bucket.length,
       maxValue: Math.max(...values),
       avgValue: values.reduce((a, b) => a + b, 0) / values.length,
-      hasVote: bucket.some(tx => tx.isVote),
-      hasFailed: bucket.some(tx => tx.status === 'failed'),
-      hasSuccess: bucket.some(tx => tx.status === 'success' && !tx.isVote),
+      hasVote: voteCount > 0,
+      hasFailed: failedCount > 0,
+      hasSuccess: successCount > 0,
+      successCount,
+      failedCount,
+      voteCount,
       matchesAccountFilter: accountFilters.size === 0 || bucket.some(tx => tx.writableAccounts.some(addr => accountFilters.has(addr))),
       matchesProgramFilter: programFilters.size === 0 || bucket.some(tx => tx.programs.some(p => programFilters.has(p))),
       transactions: bucket,
@@ -341,7 +353,30 @@ export function renderFeeChart(transactions: TransactionMetrics[], accountFilter
           const matchesFilter = bar.matchesAccountFilter && bar.matchesProgramFilter;
           const tooltip = bar.count === 1
             ? `Index: ${bar.startIndex} | ${METRIC_LABELS[state.metric]}: ${formatValue(bar.maxValue)} | ${bar.hasVote ? 'Vote' : bar.hasFailed ? 'failed' : 'success'}`
-            : `Txs ${bar.startIndex}-${bar.endIndex} (${bar.count}) | Max: ${formatValue(bar.maxValue)} | Avg: ${formatValue(bar.avgValue)}`;
+            : `Txs ${bar.startIndex}-${bar.endIndex} (${bar.count}) | Max: ${formatValue(bar.maxValue)} | Avg: ${formatValue(bar.avgValue)} | ${bar.successCount} ok, ${bar.failedCount} fail${bar.voteCount > 0 ? `, ${bar.voteCount} vote` : ''}`;
+
+          // For aggregated bars with mixed types, render stacked segments
+          if (bar.count > 1 && (bar.successCount > 0 || bar.failedCount > 0 || bar.voteCount > 0)) {
+            const total = bar.successCount + bar.failedCount + bar.voteCount;
+            const failedPct = (bar.failedCount / total) * 100;
+            const successPct = (bar.successCount / total) * 100;
+            const votePct = (bar.voteCount / total) * 100;
+
+            return `
+              <div class="bar-wrapper${hasFilters && !matchesFilter ? ' dimmed' : ''}${hasFilters && matchesFilter ? ' highlighted' : ''}"
+                   data-start-index="${bar.startIndex}"
+                   data-end-index="${bar.endIndex}"
+                   data-count="${bar.count}"
+                   data-tooltip="${tooltip}">
+                <div class="bar stacked" style="height: ${height}%;">
+                  ${bar.failedCount > 0 ? `<div class="bar-segment failed" style="height: ${failedPct}%;"></div>` : ''}
+                  ${bar.successCount > 0 ? `<div class="bar-segment success" style="height: ${successPct}%;"></div>` : ''}
+                  ${bar.voteCount > 0 ? `<div class="bar-segment vote" style="height: ${votePct}%;"></div>` : ''}
+                </div>
+              </div>
+            `;
+          }
+
           const color = bar.count === 1
             ? getBarColor(bar.transactions[0]!)
             : getAggregatedBarColor(bar);

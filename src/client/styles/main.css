@@ -686,6 +686,29 @@ tr.clickable {
   transition: opacity 0.15s;
 }
 
+.bar.stacked {
+  display: flex;
+  flex-direction: column-reverse;
+  background: transparent;
+}
+
+.bar-segment {
+  width: 100%;
+  flex-shrink: 0;
+}
+
+.bar-segment.success {
+  background: var(--color-success);
+}
+
+.bar-segment.failed {
+  background: var(--color-failed);
+}
+
+.bar-segment.vote {
+  background: var(--color-vote);
+}
+
 .chart-legend {
   display: flex;
   justify-content: center;
