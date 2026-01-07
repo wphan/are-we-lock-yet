@@ -279,11 +279,61 @@ function getPrograms(tx: any): string[] {
     );
   }
 
+  // Build set of writable accounts to exclude them from potential programs
+  const header = message.header;
+  const numWritableSigners = header.numRequiredSignatures - header.numReadonlySignedAccounts;
+  const numStaticAccounts = message.staticAccountKeys.length;
+  const numReadonlyUnsigned = header.numReadonlyUnsignedAccounts;
+  const readonlyUnsignedStart = numStaticAccounts - numReadonlyUnsigned;
+
+  const writableSet = new Set<string>();
+  // Writable signers
+  for (let i = 0; i < numWritableSigners; i++) {
+    writableSet.add(accountKeys[i]);
+  }
+  // Writable non-signers
+  for (let i = header.numRequiredSignatures; i < readonlyUnsignedStart; i++) {
+    writableSet.add(accountKeys[i]);
+  }
+  // Writable from ALT
+  if (tx.meta?.loadedAddresses?.writable) {
+    for (const addr of tx.meta.loadedAddresses.writable) {
+      writableSet.add(addr.toBase58());
+    }
+  }
+
   const programs = new Set<string>();
+
+  // Top-level instructions
   for (const ix of message.compiledInstructions) {
     const programId = accountKeys[ix.programIdIndex];
     if (programId) {
       programs.add(programId);
+    }
+
+    // Check instruction accounts for potential CPI targets (read-only accounts passed to instructions)
+    // These are likely programs that would be CPI'd into
+    for (const accountIndex of ix.accountKeyIndexes) {
+      const account = accountKeys[accountIndex];
+      if (account && !writableSet.has(account)) {
+        // Read-only account passed to instruction - could be a CPI target
+        // Only add if it looks like a program (not a signer)
+        if (accountIndex >= header.numRequiredSignatures) {
+          programs.add(account);
+        }
+      }
+    }
+  }
+
+  // Inner instructions (CPIs)
+  if (tx.meta?.innerInstructions) {
+    for (const inner of tx.meta.innerInstructions) {
+      for (const ix of inner.instructions) {
+        const programId = accountKeys[ix.programIdIndex];
+        if (programId) {
+          programs.add(programId);
+        }
+      }
     }
   }
 

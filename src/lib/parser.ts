@@ -128,10 +128,24 @@ function getPrograms(tx: VersionedTransactionResponse): string[] {
   }
 
   const programs = new Set<string>();
+
+  // Top-level instructions
   for (const ix of message.compiledInstructions) {
     const programId = accountKeys[ix.programIdIndex];
     if (programId) {
       programs.add(programId);
+    }
+  }
+
+  // Inner instructions (CPIs)
+  if (tx.meta?.innerInstructions) {
+    for (const inner of tx.meta.innerInstructions) {
+      for (const ix of inner.instructions) {
+        const programId = accountKeys[(ix as any).programIdIndex];
+        if (programId) {
+          programs.add(programId);
+        }
+      }
     }
   }
 
