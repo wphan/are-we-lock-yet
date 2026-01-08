@@ -204,8 +204,13 @@ app.get('/api/analytics/account-blocks', async (c) => {
   return c.json(responseData, statusCode as any);
 });
 
-// Redirect root to explorer
-app.get('/', (c) => c.redirect('/explorer.html'));
+// Redirect root to explorer (middleware to run before static serving)
+app.use(async (c, next) => {
+  if (c.req.path === '/') {
+    return c.redirect('/explorer.html');
+  }
+  return next();
+});
 
 // Serve static files
 app.use('/*', serveStatic({ root: './src/client' }));
