@@ -10,6 +10,9 @@ const VOTE_PROGRAM_ID = 'Vote111111111111111111111111111111111111111';
 const PUBLIC_RPC_URL = 'https://api.mainnet-beta.solana.com';
 const FALLBACK_RPC_URL = process.env.SOLANA_RPC_URL; // Paid RPC (Helius, etc.)
 const DEFAULT_CU_LIMIT = 200_000;
+// v1 transactions (SIMD-0385) are live on mainnet. getBlock fails with -32015
+// for the whole block if this value is lower than the newest version in it.
+const MAX_SUPPORTED_TRANSACTION_VERSION = 1;
 
 // Fetch block trying public RPC first, falling back to paid RPC if available
 async function fetchBlockWithFallback(
@@ -19,7 +22,7 @@ async function fetchBlockWithFallback(
   try {
     const connection = new Connection(PUBLIC_RPC_URL, { commitment: 'confirmed' });
     const block = await connection.getBlock(slot, {
-      maxSupportedTransactionVersion: 0,
+      maxSupportedTransactionVersion: MAX_SUPPORTED_TRANSACTION_VERSION,
       transactionDetails: 'full',
       rewards: true,
     });
@@ -36,7 +39,7 @@ async function fetchBlockWithFallback(
     try {
       const fallbackConnection = new Connection(FALLBACK_RPC_URL, { commitment: 'confirmed' });
       const block = await fallbackConnection.getBlock(slot, {
-        maxSupportedTransactionVersion: 0,
+        maxSupportedTransactionVersion: MAX_SUPPORTED_TRANSACTION_VERSION,
         transactionDetails: 'full',
         rewards: true,
       });
@@ -146,11 +149,23 @@ function getLeaderFromBlock(block: { rewards?: Array<{ pubkey: string; rewardTyp
   return leaderReward?.pubkey ?? null;
 }
 
-function parseComputeBudgetInstructions(tx: any): { cuLimit: number; cuPrice: number } {
+function parseComputeBudget(tx: any): { cuLimit: number; cuPrice: number; prioritizationFee: number } {
+  const message = tx.transaction.message;
+
+  // v1 transactions set the compute budget in the message (`transactionConfig`).
+  // The runtime ignores Compute Budget instructions in v1, and unset values are 0.
+  // `priorityFee` is a total in lamports, so derive the per-CU price from it.
+  if (message.version === 1) {
+    const config = message.transactionConfig;
+    const cuLimit = config?.computeUnitLimit ?? 0;
+    const prioritizationFee = config?.priorityFee ?? 0;
+    const cuPrice = cuLimit > 0 ? Math.floor((prioritizationFee * 1_000_000) / cuLimit) : 0;
+    return { cuLimit, cuPrice, prioritizationFee };
+  }
+
   let cuLimit = DEFAULT_CU_LIMIT;
   let cuPrice = 0;
 
-  const message = tx.transaction.message;
   const accountKeys = message.staticAccountKeys.map((k: any) => k.toBase58());
 
   if ('addressTableLookups' in message && tx.meta?.loadedAddresses) {
@@ -181,7 +196,8 @@ function parseComputeBudgetInstructions(tx: any): { cuLimit: number; cuPrice: nu
     }
   }
 
-  return { cuLimit, cuPrice };
+  const prioritizationFee = Math.ceil((cuPrice * cuLimit) / 1_000_000);
+  return { cuLimit, cuPrice, prioritizationFee };
 }
 
 function getWritableAccounts(tx: any): string[] {
@@ -343,7 +359,7 @@ function getPrograms(tx: any): string[] {
 function parseTransaction(tx: any, index: number): TransactionMetrics {
   const signature = tx.transaction.signatures[0] ?? 'unknown';
 
-  const { cuLimit, cuPrice } = parseComputeBudgetInstructions(tx);
+  const { cuLimit, cuPrice, prioritizationFee } = parseComputeBudget(tx);
   const cuUsed = tx.meta?.computeUnitsConsumed ?? 0;
   const accounts = getAllAccounts(tx);
   const writableAccounts = accounts.filter(a => a.isWritable).map(a => a.address);
@@ -363,7 +379,6 @@ function parseTransaction(tx: any, index: number): TransactionMetrics {
   const dataBytesCost = Math.ceil(dataBytes / 32);
 
   const cost = signatureCost + writeLockCost + dataBytesCost + cuLimit;
-  const prioritizationFee = Math.ceil((cuPrice * cuLimit) / 1_000_000);
   const baseFee = 5000 * numSignatures;
   const reward = baseFee + prioritizationFee;
   const priority = Math.floor((reward * 1_000_000) / (cost + 1));

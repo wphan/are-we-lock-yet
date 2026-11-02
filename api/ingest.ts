@@ -8,6 +8,9 @@ import postgres from "postgres";
 const MAX_WRITABLE_ACCOUNT_UNITS = 12_000_000;
 const COMPUTE_BUDGET_PROGRAM_ID = "ComputeBudget111111111111111111111111111111";
 const DEFAULT_CU_LIMIT = 200_000;
+// v1 transactions are live on mainnet. getBlock fails with -32015 for the
+// whole block if this value is lower than the newest version in it.
+const MAX_SUPPORTED_TRANSACTION_VERSION = 1;
 const SET_COMPUTE_UNIT_LIMIT = 0x02;
 
 // Solana produces ~750 blocks per 5 minutes (2.5 blocks/sec × 300s)
@@ -39,8 +42,15 @@ function getDb() {
 }
 
 function parseComputeBudgetInstructions(tx: any): number {
-  let cuLimit = DEFAULT_CU_LIMIT;
   const message = tx.transaction.message;
+
+  // v1 transactions (SIMD-0385) set the CU limit in the message. The runtime
+  // ignores Compute Budget instructions in v1, and an unset limit is 0.
+  if (message.version === 1) {
+    return message.transactionConfig?.computeUnitLimit ?? 0;
+  }
+
+  let cuLimit = DEFAULT_CU_LIMIT;
   const accountKeys = message.staticAccountKeys.map((k: any) => k.toBase58());
 
   if ("addressTableLookups" in message && tx.meta?.loadedAddresses) {
@@ -111,7 +121,7 @@ async function fetchAndParseBlock(
 ): Promise<BlockData | null> {
   try {
     const block = await connection.getBlock(slot, {
-      maxSupportedTransactionVersion: 0,
+      maxSupportedTransactionVersion: MAX_SUPPORTED_TRANSACTION_VERSION,
       transactionDetails: "full",
       rewards: false,
     });

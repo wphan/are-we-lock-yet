@@ -14,15 +14,27 @@ const SET_COMPUTE_UNIT_PRICE = 0x03;
 interface ParsedComputeBudget {
   cuLimit: number;
   cuPrice: number;
+  prioritizationFee: number;
 }
 
-function parseComputeBudgetInstructions(
+function parseComputeBudget(
   tx: VersionedTransactionResponse
 ): ParsedComputeBudget {
+  const message = tx.transaction.message;
+
+  // v1 transactions (SIMD-0385) set the compute budget in the message.
+  // The runtime ignores Compute Budget instructions in v1, and unset values are 0.
+  // `priorityFee` is a total in lamports, so derive the per-CU price from it.
+  if (message.version === 1) {
+    const cuLimit = message.transactionConfig.computeUnitLimit ?? 0;
+    const prioritizationFee = message.transactionConfig.priorityFee ?? 0;
+    const cuPrice =
+      cuLimit > 0 ? Math.floor((prioritizationFee * 1_000_000) / cuLimit) : 0;
+    return { cuLimit, cuPrice, prioritizationFee };
+  }
+
   let cuLimit = DEFAULT_CU_LIMIT;
   let cuPrice = 0;
-
-  const message = tx.transaction.message;
   const accountKeys = message.staticAccountKeys.map((k) => k.toBase58());
 
   // Add lookup table addresses for versioned transactions
@@ -56,7 +68,8 @@ function parseComputeBudgetInstructions(
     }
   }
 
-  return { cuLimit, cuPrice };
+  const prioritizationFee = Math.ceil((cuPrice * cuLimit) / 1_000_000);
+  return { cuLimit, cuPrice, prioritizationFee };
 }
 
 function getWritableAccounts(tx: VersionedTransactionResponse): string[] {
@@ -159,7 +172,7 @@ export function parseTransaction(
   const signature =
     tx.transaction.signatures[0] ?? 'unknown';
 
-  const { cuLimit, cuPrice } = parseComputeBudgetInstructions(tx);
+  const { cuLimit, cuPrice, prioritizationFee } = parseComputeBudget(tx);
   const cuUsed = tx.meta?.computeUnitsConsumed ?? 0;
   const writableAccounts = getWritableAccounts(tx);
   const signers = getSigners(tx);
@@ -181,8 +194,6 @@ export function parseTransaction(
 
   const cost = signatureCost + writeLockCost + dataBytesCost + cuLimit;
 
-  // Calculate prioritization fee
-  const prioritizationFee = Math.ceil((cuPrice * cuLimit) / 1_000_000);
   const baseFee = 5000 * numSignatures;
   const reward = baseFee + prioritizationFee;
 
